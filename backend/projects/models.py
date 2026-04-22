@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from .utils import add_working_days
 
 class Location(models.Model):
     LEVEL_CHOICES = (
@@ -119,7 +120,8 @@ class PhaseTask(models.Model):
     completed_units = models.IntegerField(default=0)
     unit_name = models.CharField(max_length=50, blank=True, help_text="e.g. Tons, Meters, Hours")
     start_date = models.DateField()
-    end_date = models.DateField()
+    duration_working_days = models.IntegerField(default=1)
+    end_date = models.DateField(blank=True, null=True)
     progress = models.IntegerField(default=0, help_text="Percentage 0-100")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -147,5 +149,8 @@ class PhaseTask(models.Model):
             self.status = 'completed'
         elif self.progress > 0 and self.status == 'pending':
             self.status = 'on-track'
+
+        if self.start_date and self.duration_working_days:
+            self.end_date = add_working_days(self.start_date, self.duration_working_days)
             
         super().save(*args, **kwargs)
