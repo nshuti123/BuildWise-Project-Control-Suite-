@@ -194,7 +194,25 @@ export function ProjectPlanning() {
               </div>
             </div>
 
-            <div className="space-y-3">
+            <div className="relative space-y-3 z-0">
+              {/* Vertical shaded blocks for weekends */}
+              <div className="absolute inset-0 pointer-events-none" style={{ zIndex: -1 }}>
+                {Array.from({ length: Math.ceil(totalDuration / (1000 * 60 * 60 * 24)) }).map((_, i) => {
+                  const d = new Date(minDate.getTime() + i * (1000 * 60 * 60 * 24));
+                  if (d.getDay() !== 0 && d.getDay() !== 6) return null;
+                  return (
+                    <div 
+                      key={i} 
+                      className="absolute top-0 bottom-0 bg-slate-100/60 border-x border-slate-200/50"
+                      style={{
+                        left: `${(i / Math.ceil(totalDuration / (1000 * 60 * 60 * 24))) * 100}%`,
+                        width: `${100 / Math.ceil(totalDuration / (1000 * 60 * 60 * 24))}%`
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
               {tasks.length > 0 ? tasks.map((task, index) => {
                 const startPercent = getPercentage(task.start_date);
                 const endPercent = getPercentage(task.end_date);
@@ -226,7 +244,7 @@ export function ProjectPlanning() {
                           left: `${startPercent}%`,
                           width: `${durationPercent}%`,
                         }}
-                        title={`${task.start_date} to ${task.end_date}`}
+                        title={`${task.start_date} to ${task.end_date} (${task.duration_working_days || 'N/A'} working days)`}
                       >
                         <div 
                            className={`absolute top-0 left-0 h-full transition-all ${

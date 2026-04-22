@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { X } from "lucide-react";
 import api from "../api";
+import { addWorkingDays } from "../utils/calendar";
 
 interface AddPhaseTaskModalProps {
   isOpen: boolean;
@@ -21,7 +22,7 @@ export function AddPhaseTaskModal({
     phase: "",
     task_name: "",
     start_date: "",
-    end_date: "",
+    duration_working_days: 1,
     progress: 0,
     status: "pending",
     tracking_method: "manual",
@@ -38,7 +39,7 @@ export function AddPhaseTaskModal({
         phase: task.phase,
         task_name: task.task_name,
         start_date: task.start_date,
-        end_date: task.end_date,
+        duration_working_days: task.duration_working_days || 1,
         progress: task.progress,
         status: task.status,
         tracking_method: task.tracking_method || "manual",
@@ -51,7 +52,7 @@ export function AddPhaseTaskModal({
         phase: "",
         task_name: "",
         start_date: "",
-        end_date: "",
+        duration_working_days: 1,
         progress: 0,
         status: "pending",
         tracking_method: "manual",
@@ -145,14 +146,18 @@ export function AddPhaseTaskModal({
               />
             </div>
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-slate-700">End Date</label>
+              <label className="block text-sm font-medium text-slate-700">Duration (Working Days)</label>
               <input
-                type="date"
+                type="number"
+                min="1"
                 required
-                value={formData.end_date}
-                onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
+                value={formData.duration_working_days}
+                onChange={(e) => setFormData({ ...formData, duration_working_days: parseInt(e.target.value) || 1 })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none"
               />
+              <div className="text-xs text-slate-500 mt-1">
+                Estimated End Date: {formData.start_date && formData.duration_working_days > 0 ? addWorkingDays(formData.start_date, formData.duration_working_days)?.toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" }) : "TBD"}
+              </div>
             </div>
           </div>
 
