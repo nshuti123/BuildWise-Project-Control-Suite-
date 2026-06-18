@@ -1,151 +1,126 @@
-import { useState, useEffect } from "react";
-import { DollarSign, TrendingUp, AlertTriangle, FileText } from "lucide-react";
-import { MetricCard } from "../components/MetricCard";
+import { useState, useEffect, useMemo } from "react";
 import api from "../api";
+import { asList } from "../utils/apiHelpers";
+import { useProject } from "../context/ProjectContext";
+import {
+  FinanceKpiGrid,
+  PendingExpensesPanel,
+  PendingPayrollPanel,
+  BudgetUtilizationPanel,
+  PayrollHistoryPanel,
+  CashFlowSummaryPanel,
+  type FinanceKpis,
+  type PendingTransactionRow,
+  type PayrollRow,
+} from "../components/FinanceOverviewPanels";
 
-export function AccountantDashboard() {
-  const [budgetMetrics, setBudgetMetrics] = useState({
-    totalBudget: 0,
-    totalSpent: 0,
-    pendingPayments: 0
-  });
-  
-  const [payrolls, setPayrolls] = useState<any[]>([]);
+export function AccountantDashboard({
+  setActiveModule,
+}: {
+  setActiveModule?: (m: string) => void;
+} = {}) {
+  const { currentProjectId, projects } = useProject();
+  const [kpis, setKpis] = useState<FinanceKpis | null>(null);
+  const [cashFlow, setCashFlow] = useState<{ date: string; amount: number }[]>([]);
+  const [pendingTransactions, setPendingTransactions] = useState<PendingTransactionRow[]>([]);
+  const [payrolls, setPayrolls] = useState<PayrollRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Use fixed projectId 1 for prototype
-  const projectId = 1;
+  const projectScope = currentProjectId
+    ? projects.find((p) => p.id === currentProjectId)?.name
+    : null;
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [currentProjectId]);
 
   const fetchData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
-      // We will reuse the actual payrolls API
-      const payrollRes = await api.get(`/workforce/payrolls/?project=${projectId}`);
-      const fetchedPayrolls = payrollRes.data;
-      setPayrolls(fetchedPayrolls);
+      const analyticsUrl = currentProjectId
+        ? `/projects/portfolio-analytics/?project=${currentProjectId}`
+        : "/projects/portfolio-analytics/";
+      const payrollUrl = currentProjectId
+        ? `/workforce/payrolls/?project=${currentProjectId}`
+        : "/workforce/payrolls/";
 
-      // Simple mock metrics relying on fetched data
-      const pendingTotal = fetchedPayrolls
-        .filter((p: any) => p.status === 'pending')
-        .reduce((sum: number, p: any) => sum + Number(p.total_amount), 0);
-        
-      setBudgetMetrics({
-        totalBudget: 1500000, 
-        totalSpent: 450000,
-        pendingPayments: pendingTotal
-      });
-      
+      const [analytics, payrollRes] = await Promise.all([
+        api.get(analyticsUrl),
+        api.get(payrollUrl),
+      ]);
+
+      setKpis(analytics.data.kpis);
+      setCashFlow(analytics.data.cash_flow || []);
+      setPendingTransactions(analytics.data.recent_pending_transactions || []);
+      const list = asList(payrollRes.data) as PayrollRow[];
+      list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      setPayrolls(list);
     } catch (err) {
       console.error(err);
+      setLoadError("Could not load financial data. Check that the server is running.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const pendingPayrolls = useMemo(
+    () =>
+      payrolls.filter(
+        (p) => p.status === "awaiting_finance",
+      ),
+    [payrolls],
+  );
+
   if (isLoading) {
-    return <div className="p-8 text-center text-slate-500">Loading Financial Data...</div>;
+    return (
+      <div className="p-8 text-center text-slate-500">Loading finance overview...</div>
+    );
   }
 
-  const pendingPayrollsCount = payrolls.filter(p => p.status === 'pending').length;
+  if (loadError) {
+    return (
+      <div className="p-8 text-center text-red-600 bg-red-50 border border-red-100 rounded-xl">
+        {loadError}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            Accountant Dashboard
-          </h1>
-          <p className="text-slate-600">
-            System-wide financial oversight and approvals
-          </p>
-        </div>
+    <div className="space-y-8 animate-fade-in">
+      <div>
+        <h1 className="text-3xl font-bold text-slate-900">Finance overview</h1>
+        <p className="text-slate-600 mt-1">
+          {projectScope
+            ? `Budget and approvals for ${projectScope}`
+            : "Your assigned projects — budget, spend, and approval queues"}
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <MetricCard
-          title="Total Budget Allocation"
-          value={`${budgetMetrics.totalBudget.toLocaleString()} Rwf`}
-          change="Available pipeline"
-          changeType="positive"
-          icon={DollarSign}
-          iconColor="bg-blue-600"
+      <FinanceKpiGrid kpis={kpis} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <BudgetUtilizationPanel
+          utilization={Number(kpis?.budget_utilization ?? 0)}
+          totalBudget={Number(kpis?.total_budget ?? 0)}
+          totalSpend={Number(kpis?.total_spend ?? 0)}
         />
-        <MetricCard
-          title="Total Accrued Expenses"
-          value={`${budgetMetrics.totalSpent.toLocaleString()} Rwf`}
-          change="Completed payments"
-          changeType="neutral"
-          icon={TrendingUp}
-          iconColor="bg-orange-500"
-        />
-        <MetricCard
-          title="Pending Commitments"
-          value={`${budgetMetrics.pendingPayments.toLocaleString()} Rwf`}
-          change={`${pendingPayrollsCount} batches require approval`}
-          changeType={pendingPayrollsCount > 0 ? "negative" : "neutral"}
-          icon={AlertTriangle}
-          iconColor={pendingPayrollsCount > 0 ? "bg-red-500" : "bg-emerald-500"}
-        />
+        <CashFlowSummaryPanel cashFlow={cashFlow} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-               <FileText className="text-blue-600" />
-               Pending Payrolls
-            </h2>
-          </div>
-          
-          <div className="space-y-4">
-             {payrolls.filter(p => p.status === 'pending').length === 0 ? (
-                <div className="p-6 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-100">
-                    No pending payrolls require your action.
-                </div>
-             ) : (
-                payrolls.filter(p => p.status === 'pending').slice(0, 5).map(payroll => (
-                   <div key={payroll.id} className="p-4 border border-slate-200 rounded-lg flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors">
-                       <div>
-                          <p className="font-bold text-slate-900">Batch {payroll.id} - {payroll.date}</p>
-                          <p className="text-xs text-slate-500 mt-1">Initiated by System</p>
-                       </div>
-                       <div className="text-right">
-                          <p className="font-bold text-slate-800">{Number(payroll.total_amount).toLocaleString()} Rwf</p>
-                          <p className="text-xs text-amber-600 font-bold uppercase mt-1">Pending Review</p>
-                       </div>
-                   </div>
-                ))
-             )}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-               <TrendingUp className="text-emerald-600" />
-               Budget Burn Rate
-            </h2>
-          </div>
-          <div className="space-y-4">
-              <div>
-                  <div className="flex justify-between text-sm mb-2">
-                     <span className="font-bold text-slate-700">Operational Target</span>
-                     <span className="text-slate-600">{((budgetMetrics.totalSpent / budgetMetrics.totalBudget) * 100).toFixed(1)}% Consumed</span>
-                  </div>
-                  <div className="w-full bg-slate-100 rounded-full h-3">
-                     <div className="bg-blue-600 h-3 rounded-full" style={{ width: `${(budgetMetrics.totalSpent / budgetMetrics.totalBudget) * 100}%` }}></div>
-                  </div>
-              </div>
-              <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg mt-6 text-sm text-blue-800">
-                  <p><strong>Note:</strong> Over 60% of the allocated budget remains unspent. Labor payments account for approx 15% of historical expenditure.</p>
-              </div>
-          </div>
-        </div>
+        <PendingExpensesPanel
+          items={pendingTransactions}
+          onOpenBudget={setActiveModule ? () => setActiveModule("budget") : undefined}
+        />
+        <PendingPayrollPanel
+          payrolls={pendingPayrolls}
+          onOpenPayrolls={setActiveModule ? () => setActiveModule("payrolls") : undefined}
+        />
       </div>
+
+      <PayrollHistoryPanel payrolls={payrolls} />
     </div>
   );
 }

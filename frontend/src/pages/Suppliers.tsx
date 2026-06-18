@@ -1,7 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Plus, Search, Edit2, Star, Truck } from "lucide-react";
 import api from "../api";
 import { SupplierModal } from "../components/SupplierModal";
+import { Pagination } from "../components/Pagination";
+import { TableReportActions } from "../components/TableReportActions";
+import type { TableReportData } from "../utils/tableReportExport";
 
 interface Supplier {
   id: number;
@@ -24,16 +27,29 @@ export function Suppliers() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [supplierToEdit, setSupplierToEdit] = useState<Supplier | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
 
-  const fetchData = async () => {
+  const fetchData = async (page: number = 1) => {
     setIsLoading(true);
     try {
       const [suppliersRes, materialsRes] = await Promise.all([
-        api.get("/procurement/suppliers/"),
-        api.get("/procurement/materials/")
+        api.get(`/procurement/suppliers/?page=${page}`),
+        api.get("/procurement/materials/?page_size=100")
       ]);
       setSuppliers(suppliersRes.data);
       setMaterials(materialsRes.data);
+      
+      const authResp = suppliersRes as any;
+      if (authResp.pagination) {
+        setTotalItems(authResp.pagination.count);
+        setTotalPages(Math.ceil(authResp.pagination.count / 10));
+      } else {
+        setTotalItems(suppliersRes.data.length);
+        setTotalPages(1);
+      }
     } catch (err) {
       console.error("Failed to fetch data:", err);
     } finally {
@@ -42,8 +58,8 @@ export function Suppliers() {
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData(currentPage);
+  }, [currentPage]);
 
   const openAddModal = () => {
     setSupplierToEdit(null);
@@ -58,6 +74,23 @@ export function Suppliers() {
   const filteredSuppliers = suppliers.filter((s) =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const suppliersReport = useMemo((): TableReportData => {
+    const columns = ["Supplier", "Rating", "Email", "Materials supplied"];
+    const rows = filteredSuppliers.map((s) => [
+      s.name,
+      s.rating,
+      s.email ?? "—",
+      s.materials_supplied?.length ? String(s.materials_supplied.length) : "—",
+    ]);
+    return {
+      title: "Vendor Directory",
+      subtitle: `${filteredSuppliers.length} suppliers`,
+      filename: "Suppliers",
+      columns,
+      rows,
+    };
+  }, [filteredSuppliers]);
 
   if (isLoading && suppliers.length === 0) {
     return <div className="p-8 text-center text-slate-500">Loading Suppliers...</div>;
@@ -89,17 +122,23 @@ export function Suppliers() {
             <Truck className="text-blue-600" />
             Vendor Directory
           </h2>
-          <div className="relative">
-            <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              size={16}
-            />
-            <input
-              type="text"
-              placeholder="Search suppliers..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64"
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative">
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                size={16}
+              />
+              <input
+                type="text"
+                placeholder="Search suppliers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64"
+              />
+            </div>
+            <TableReportActions
+              report={suppliersReport}
+              disabled={filteredSuppliers.length === 0}
             />
           </div>
         </div>
@@ -165,6 +204,12 @@ export function Suppliers() {
               </tbody>
             </table>
           )}
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={setCurrentPage}
+            totalItems={totalItems}
+          />
         </div>
       </div>
 

@@ -1,0 +1,247 @@
+================================================================================
+BUILDWISE — FUNCTIONALITIES IMPLEMENTED (AS OF PROJECT STATE)
+================================================================================
+
+This document lists features implemented in the BuildWise construction project
+control system. Some screens are full workflows (backend + UI); others are UI
+shells or demos with limited or static backend integration.
+
+--------------------------------------------------------------------------------
+1. PLATFORM & SECURITY
+--------------------------------------------------------------------------------
+
+  - JWT login (username/password; email also accepted); access + refresh tokens
+  - Password reset via email OTP (6-digit, time-limited)
+  - Role-based access control (12+ roles, different menus and data scope)
+  - Project scoping via sidebar project selector (filters most modules)
+  - User profile: edit name, email, profile picture
+  - User management: create, edit, deactivate users; roles, department, reports-to
+        (writes: System Admin or Managing Director)
+  - Technical Director: view all users (read-only directory)
+  - Organizational hierarchy: reports_to, subordinates, staff on projects
+  - In-app notifications (payroll, PO, approvals, etc.) with read/unread state
+  - Internal messaging: inbox, sent, urgent flag, read status
+  - Company announcements with acknowledgments
+  - System administration: action logs, server metrics (Admin)
+
+--------------------------------------------------------------------------------
+2. PROJECTS & PLANNING
+--------------------------------------------------------------------------------
+
+  - Projects CRUD: name, Rwanda location hierarchy, construction type, budget
+        (text + numeric RWF), deadline, progress percentage
+  - Project team: PM, site engineer, procurement officer, project accountant,
+        site foreman, subcontractors
+  - Manual project status override (on-track / at-risk / delayed / completed)
+  - Automatic status rules when not manual (progress + deadline)
+  - Project detail page: overview, team, status editor
+  - Portfolio analytics: KPIs, budget/spend, utilization, pending transactions
+        and payroll, cash flow, PM performance
+  - Milestones on named dates
+  - Project phases and phase tasks: dependencies, working days, progress modes
+        (manual, subtasks, units)
+  - Schedule baselines (snapshots)
+  - Schedule export to CSV
+  - Optional AI schedule generation (Groq API)
+  - Daily site tasks: priority, status, location, date/time, workers, phase link
+  - Task progress photos: upload and delete
+  - Auto-assign workers to tasks (skills and contract availability)
+  - Subtasks as checklists under parent tasks
+  - Progress monitoring: aggregated progress, charts, delay indicators
+  - Site incidents: safety, quality, equipment, etc.; severity; open/resolved;
+        approval routing for site reporters
+  - Staff assignment requests on projects (e.g. procurement officer, accountant)
+  - Project documents: upload and manage files
+
+--------------------------------------------------------------------------------
+3. BUDGET & COST CONTROL
+--------------------------------------------------------------------------------
+
+  - Budget categories: Labor, Materials, Equipment, Overheads (+ custom categories)
+  - Budget line items per project: planned vs actual amounts
+  - Transactions: pending, approved, rejected
+  - Manual expense logging with category and budget line
+  - Approve/reject transactions in Budget & Costs (finance roles; PM in some cases)
+  - Transaction receipt view; Director of Finance can delete transaction history
+  - Budget allocation enforcement:
+        * Payroll must use allocated Labor budget
+        * Purchase orders must use allocated Materials or Equipment budget
+        * Clear errors if nothing allocated (accountant must allocate first)
+        * Procurement officers see generic "contact finance" message on PO errors
+  - Cash flow charts and budget summaries; variance by category
+  - PDF reports: financial, progress, HR, procurement, daily/custom transactions
+  - AI cost forecast in budget UI (when configured)
+  - Custom report builder with date ranges
+
+  Budget category meanings (typical use):
+        Labor      — worker wages via payroll (system-enforced)
+        Materials  — material purchase orders
+        Equipment  — equipment purchase orders
+        Overheads  — permits, admin, insurance, site office, indirect costs
+        Permits    — optional custom category for regulatory fees (manual tx)
+
+--------------------------------------------------------------------------------
+4. PROCUREMENT & INVENTORY
+--------------------------------------------------------------------------------
+
+  - Materials catalog: units, unit price, central stock levels
+  - Suppliers: contacts, ratings, linked materials
+  - Purchase orders: supplier, material, quantity, amount, order type, dates, project
+  - Server-generated unique PO numbers
+  - PO statuses: pending, on-track, delayed, completed; auto-delay when overdue
+  - Email PO PDF to supplier (when email configured)
+  - On PO creation by procurement officer: automatic pending expense in transaction
+        history; notifications to Director of Finance and project accountant
+  - Request payment: links PO to pending budget transaction
+  - Material requests: site requests from central stock; multi-step approval
+        (procurement officer, then PM or Technical Director confirmation)
+  - Site inventory: per-project material stock
+  - Material allocation to tasks (approval required for site staff)
+  - Procurement dashboards: KPIs, orders, low stock, deliveries
+
+--------------------------------------------------------------------------------
+5. WORKFORCE & PAYROLL
+--------------------------------------------------------------------------------
+
+  - Workers per project: trade, daily rate, contract dates
+  - Bulk worker import via CSV
+  - Daily attendance: present, absent, half-day, leave, overtime
+  - Attendance locked during payroll review (limited site engineer edit when allowed)
+  - Daily payroll initiation from attendance (site foreman, site engineer,
+        technical director)
+  - Payroll workflow: foreman -> site engineer -> finance, OR site engineer/TD
+        direct to finance
+  - Finance approval by accountant and/or Director of Finance
+  - Approved payroll updates Labor budget via approved transactions
+  - Payroll Operations page and finance overview queues
+  - Reject payroll to allow attendance corrections
+
+--------------------------------------------------------------------------------
+6. APPROVALS (CROSS-CUTTING)
+--------------------------------------------------------------------------------
+
+  Approval types:
+        - Material request
+        - Purchase order
+        - Transaction
+        - Task completion
+        - Site incident
+        - Material allocation
+        - Staff assignment (e.g. assign procurement officer on project)
+
+  Material request flow (typical):
+        Site -> Procurement Officer -> Project Manager or Technical Director
+        confirms -> stock to site inventory
+
+  Technical Approval Inbox: consolidated view for TD, PM, procurement officer
+
+  Submitters often requiring approval: site foreman, site engineer,
+        procurement officer
+
+--------------------------------------------------------------------------------
+7. REPORTS & ROLE DASHBOARDS
+--------------------------------------------------------------------------------
+
+  Managing Director:
+        Executive KPIs, portfolio analytics, pending items, broad module access
+
+  Director of Finance:
+        Finance overview (live KPIs, pending expenses, payroll queue, utilization,
+        monthly approved spend), Budget Master, Payroll Operations, POs, reports
+
+  Accountant:
+        Finance overview (scoped to assigned projects), budget, payroll, reports
+
+  Technical Director:
+        Technical portfolio, procurement activity inbox, planning, tasks, budget,
+        procurement, workforce and payroll initiation, all users (read-only)
+
+  Project Manager:
+        Portfolio dashboard, create projects, planning, tasks, budget, procurement,
+        progress, reports, technical approvals
+
+  Site Engineer:
+        Site operations, project team, tasks, site inventory, workforce, incidents
+
+  Site Foreman:
+        Field operations, workforce, payroll initiation, tasks
+
+  Procurement Officer:
+        Procurement dashboard, purchase orders, warehouse/requisitions, suppliers,
+        deliveries, cost reports
+
+  System Admin:
+        System health, logs, wide module access, user management
+
+  Client / Subcontractor:
+        Mostly demo or static UI (overview, milestones, photos, messages)
+
+  Safety Officer:
+        Safety-focused menu (partial integration with site engineer views)
+
+  Reports module:
+        Generate and store PDF reports; portfolio analytics API
+
+--------------------------------------------------------------------------------
+8. COMMUNICATION
+--------------------------------------------------------------------------------
+
+  - In-app notifications linked to modules (budget, payroll, procurement, etc.)
+  - User-to-user messaging
+  - Announcements with acknowledgment alerts
+
+--------------------------------------------------------------------------------
+9. UI MODULES (PRESENT BUT LIMITED OR PLACEHOLDER)
+--------------------------------------------------------------------------------
+
+  These appear in menus for some roles but are not full production workflows:
+
+        - Change Orders
+        - RFI Tracker
+        - Bidding
+        - Quality Control
+        - Timesheets
+        - Resources (generic)
+        - Some client/subcontractor schedule and photo items
+
+--------------------------------------------------------------------------------
+10. USER ROLES IN THE SYSTEM
+--------------------------------------------------------------------------------
+
+  - managing-director
+  - director-finance
+  - technical-director
+  - accountant
+  - project-manager
+  - procurement-officer
+  - site-engineer
+  - site-foreman
+  - admin
+  - client
+  - subcontractor
+  - safety-officer
+
+--------------------------------------------------------------------------------
+11. TECHNICAL STACK (SUMMARY)
+--------------------------------------------------------------------------------
+
+  Frontend:  React, TypeScript, Vite, role-based sidebar, project context
+  Backend:   Django REST Framework, JWT authentication
+  API apps:  users, projects, procurement, workforce, approvals
+  Media:     PDF reports, document uploads, task progress photos
+
+--------------------------------------------------------------------------------
+12. KEY API AREAS (REST)
+--------------------------------------------------------------------------------
+
+  /api/users/          — auth, users, notifications, messages, announcements
+  /api/projects/       — projects, tasks, phases, budget, transactions, reports,
+                         incidents, documents, portfolio-analytics
+  /api/procurement/    — suppliers, materials, orders, requests, site inventory,
+                         allocations
+  /api/workforce/      — workers, attendance, payrolls
+  /api/approvals/      — approval requests and actions
+
+================================================================================
+END OF DOCUMENT
+================================================================================

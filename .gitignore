@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+backend/.env
+frontend/.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+
+# Django uploads and generated media
+backend/media/
+
+# Node
+node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# Office temp files
+~$*
+
+# Local debug scripts (optional one-offs)
+backend/debug_progress.py
+backend/fix_progress.py
+backend/check_transactions.py
+backend/backfill_tasks.py

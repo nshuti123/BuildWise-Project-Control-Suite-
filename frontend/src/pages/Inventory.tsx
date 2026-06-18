@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, Edit2, AlertTriangle, Package, AlertCircle } from "lucide-react";
+import { Plus, Search, Edit2, AlertTriangle, Package } from "lucide-react";
 import api from "../api";
 import { MaterialModal } from "../components/MaterialModal";
+import { MaterialRequisitionsPanel } from "../components/MaterialRequisitionsPanel";
+import { useProject } from "../context/ProjectContext";
+import { useAuth } from "../context/AuthContext";
+import { ProjectScopeBanner } from "../components/ProjectScopeBanner";
+import { Pagination } from "../components/Pagination";
 
 interface Material {
   id: number;
@@ -13,23 +18,36 @@ interface Material {
 }
 
 export function Inventory() {
+  const { user } = useAuth();
+  const { currentProjectId, projects } = useProject();
+  const isProcurementOfficer = user?.role === "procurement-officer";
+  const activeProject = projects.find((p) => p.id === currentProjectId);
   const [materials, setMaterials] = useState<Material[]>([]);
-  const [requests, setRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [materialToEdit, setMaterialToEdit] = useState<Material | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
 
-  const fetchMaterials = async () => {
+  const fetchMaterials = async (page: number = 1) => {
     setIsLoading(true);
     try {
-      const [matRes, reqRes] = await Promise.all([
-        api.get("/procurement/materials/"),
-        api.get("/procurement/requests/")
-      ]);
-      setMaterials(matRes.data);
-      setRequests(reqRes.data);
+      const matRes = await api.get(`/procurement/materials/?page=${page}`);
+      const payload = matRes.data;
+      const list = Array.isArray(payload) ? payload : payload?.results ?? [];
+      setMaterials(list);
+
+      if (payload && typeof payload === "object" && "count" in payload) {
+        const count = Number(payload.count) || list.length;
+        setTotalItems(count);
+        setTotalPages(Math.max(1, Math.ceil(count / 10)));
+      } else {
+        setTotalItems(list.length);
+        setTotalPages(1);
+      }
     } catch (err) {
       console.error("Failed to fetch materials:", err);
     } finally {
@@ -38,17 +56,8 @@ export function Inventory() {
   };
 
   useEffect(() => {
-    fetchMaterials();
-  }, []);
-
-  const handleRequestStatusObj = async (requestId: number, newStatus: string) => {
-    try {
-       await api.patch(`/procurement/requests/${requestId}/approve/`, { status: newStatus });
-       fetchMaterials();
-    } catch (err) {
-       console.error("Failed to update request", err);
-    }
-  }
+    fetchMaterials(currentPage);
+  }, [currentPage]);
 
   const openAddModal = () => {
     setMaterialToEdit(null);
@@ -94,54 +103,27 @@ export function Inventory() {
         </div>
         <button
           onClick={openAddModal}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm shadow-blue-500/20 cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm shadow-blue-500/20 cursor-pointer font-medium"
         >
           <Plus size={18} />
-          <span className="text-sm font-medium">Add Material</span>
+          <span className="text-sm">Add Material</span>
         </button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <AlertCircle className="text-amber-600" />
-            Field Requisitions
-          </h2>
-        </div>
-        
-        <div className="overflow-hidden rounded-xl border border-slate-200">
-             {requests.filter(r => r.status === 'pending' || r.status === 'approved').length === 0 ? (
-                <div className="p-6 text-center text-slate-500 bg-slate-50">No incoming field requisitions pending review.</div>
-             ) : (
-                <div className="divide-y divide-slate-100 bg-white">
-                   {requests.filter(r => r.status === 'pending' || r.status === 'approved').map(req => (
-                      <div key={req.id} className="p-4 hover:bg-slate-50 transition-colors flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                         <div className="flex items-center gap-4">
-                            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg shrink-0">
-                               <Package size={20} />
-                            </div>
-                            <div>
-                               <h4 className="font-bold text-slate-900">{req.material_name} <span className="text-slate-500">x {Number(req.quantity_requested)} {req.material_unit}</span></h4>
-                               <p className="text-xs font-medium text-slate-500 mt-0.5">Requested by {req.requested_by_name} for <span className="font-bold text-slate-700">{req.project_name}</span></p>
-                               {req.notes && <p className="text-xs text-slate-600 italic bg-amber-50 px-2 py-1 rounded inline-block mt-1">"{req.notes}"</p>}
-                            </div>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             {req.status === 'pending' ? (
-                                <>
-                                   <button onClick={() => handleRequestStatusObj(req.id, 'approved')} className="px-4 py-2 bg-emerald-50 text-emerald-700 text-sm font-bold rounded-lg hover:bg-emerald-100 transition-colors border border-emerald-200">Approve</button>
-                                   <button onClick={() => handleRequestStatusObj(req.id, 'rejected')} className="px-4 py-2 bg-red-50 text-red-700 text-sm font-bold rounded-lg hover:bg-red-100 transition-colors border border-red-200">Reject</button>
-                                </>
-                             ) : (
-                                <button onClick={() => handleRequestStatusObj(req.id, 'fulfilled')} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-sm rounded-lg hover:bg-blue-700 transition-colors">Fulfill Request</button>
-                             )}
-                         </div>
-                      </div>
-                   ))}
-                </div>
-             )}
-        </div>
-      </div>
+      {activeProject && !isProcurementOfficer && (
+        <ProjectScopeBanner
+          projectName={activeProject.name}
+          context="material requisitions"
+        />
+      )}
+
+      {(isProcurementOfficer || currentProjectId) && (
+        <MaterialRequisitionsPanel
+          className="mb-6"
+          projectId={isProcurementOfficer ? null : currentProjectId}
+          onUpdated={() => fetchMaterials(currentPage)}
+        />
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="flex items-center justify-between mb-6">
@@ -229,6 +211,12 @@ export function Inventory() {
               </tbody>
             </table>
           )}
+          <Pagination
+             currentPage={currentPage}
+             totalPages={totalPages}
+             onPageChange={setCurrentPage}
+             totalItems={totalItems}
+          />
         </div>
       </div>
 

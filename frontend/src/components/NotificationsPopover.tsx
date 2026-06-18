@@ -1,15 +1,26 @@
 import { useState, useEffect, useRef } from "react";
 import { Bell, Check, ExternalLink } from "lucide-react";
 import api from "../api";
+import { useAuth } from "../context/AuthContext";
+import { useProject } from "../context/ProjectContext";
+import { resolveNotificationModule, resolveNotificationProjectId } from "../utils/notificationNavigation";
+import {
+  isPayrollNotification,
+  openPayrollApprovalsFocus,
+  parsePayrollIdFromNotification,
+  payrollNotificationTab,
+} from "../utils/payrollNavigation";
 
-export function NotificationsPopover() {
+export function NotificationsPopover({ onNavigate }: { onNavigate?: (module: string) => void }) {
+  const { user } = useAuth();
+  const { setCurrentProjectId, projects } = useProject();
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 15000); // Polling every 15s
+    const interval = setInterval(fetchNotifications, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -47,6 +58,53 @@ export function NotificationsPopover() {
       await api.patch('/users/notifications/mark_all_read/');
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleView = (n: {
+    id: number;
+    link?: string;
+    title?: string;
+    message?: string;
+    is_read: boolean;
+    project?: number | null;
+  }) => {
+    const role = user?.role ?? "project-manager";
+    const title = n.title ?? "";
+    const message = n.message ?? "";
+
+    if (isPayrollNotification(title, message, n.link)) {
+      const payrollId = parsePayrollIdFromNotification(title, message, n.link);
+      openPayrollApprovalsFocus({
+        payrollId: payrollId ?? undefined,
+        tab: payrollNotificationTab(title, message, role),
+      });
+    }
+
+    const module = isPayrollNotification(title, message, n.link)
+      ? "payrolls"
+      : resolveNotificationModule(n.link, role, title, message);
+    const projectId = resolveNotificationProjectId(
+      n.link,
+      n.project ?? null,
+      n.title ?? "",
+      n.message ?? "",
+      projects,
+    );
+
+    if (projectId) {
+      setCurrentProjectId(projectId);
+    }
+
+    if (onNavigate) {
+      onNavigate(module);
+      setIsOpen(false);
+    } else {
+      window.location.hash = module;
+    }
+
+    if (!n.is_read) {
+      markAsRead(n.id);
     }
   };
 
@@ -100,11 +158,12 @@ export function NotificationsPopover() {
                         {new Date(n.timestamp).toLocaleDateString()} {new Date(n.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                       </span>
                       <div className="flex gap-3">
-                         {n.link && (
-                           <a href={n.link} className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1">
-                             View <ExternalLink size={12} />
-                           </a>
-                         )}
+                         <button
+                           onClick={() => handleView(n)}
+                           className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                         >
+                           View <ExternalLink size={12} />
+                         </button>
                          {!n.is_read && (
                            <button onClick={() => markAsRead(n.id)} className="text-xs font-semibold text-slate-500 hover:text-slate-800">
                              Dismiss

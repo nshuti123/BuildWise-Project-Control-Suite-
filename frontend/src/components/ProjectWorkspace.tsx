@@ -14,67 +14,86 @@ import {
 import { StatusBadge } from "./StatusBadge";
 import api from "../api";
 import { formatBudget } from "../utils/formatters";
+import { useAuth } from "../context/AuthContext";
+import { canAssignProjectManager } from "../utils/projectPermissions";
+import type { Project } from "../context/ProjectContext";
+import { ProjectStaffPanel, type ProjectStaffData } from "./ProjectStaffPanel";
 
-interface Location {
-  id: number;
-  name: string;
-  level: string;
-  parent?: number;
-}
-
-interface Project {
-  id: number;
-  name: string;
-  location: string | number;
-  address_line_2?: string;
-  location_details?: Location;
-  budget: string;
-  deadline: string;
-  progress: number;
-  construction_type: string;
-  status: "on-track" | "at-risk" | "delayed" | "completed";
-  manager_details?: {
-    id: number;
-    email: string;
-    full_name: string;
-    username: string;
-  };
-  site_engineer_details?: {
-    id: number;
-    email: string;
-    full_name: string;
-    username: string;
-  };
-  subcontractor_details?: any[];
-}
+/** Project detail view — context project plus staff-assignment fields from the API. */
+export type WorkspaceProject = Project &
+  Pick<
+    ProjectStaffData,
+    | "project_accountant_details"
+    | "procurement_officer_details"
+    | "site_foreman_details"
+    | "pending_staff_assignments"
+  >;
 
 interface ProjectWorkspaceProps {
-  project: Project;
+  project: WorkspaceProject;
   onBack: () => void;
-  onUpdate: (updatedProject: Project) => void;
+  onUpdate: (updatedProject: WorkspaceProject) => void;
 }
 
 export function ProjectWorkspace({ project, onBack, onUpdate }: ProjectWorkspaceProps) {
+  const { user } = useAuth();
+  const isTechnicalDirector = user?.role === "technical-director";
+  const canAssignManager = canAssignProjectManager(user?.role);
+  const canAssignEngineer = isTechnicalDirector || user?.role === "admin" || user?.role === "managing-director";
+
   const [engineersList, setEngineersList] = useState<{id: number, full_name: string, username: string, email: string}[]>([]);
+  const [managersList, setManagersList] = useState<{id: number, full_name: string, username: string, email: string}[]>([]);
   const [isAssigningEngineer, setIsAssigningEngineer] = useState(false);
+  const [isAssigningManager, setIsAssigningManager] = useState(false);
   const [selectedEngineerId, setSelectedEngineerId] = useState<string>("");
+  const [selectedManagerId, setSelectedManagerId] = useState<string>("");
   const [assigningError, setAssigningError] = useState("");
 
   useEffect(() => {
     api.get("/projects/site_engineers/")
       .then((res) => setEngineersList(res.data))
       .catch(console.error);
-  }, []);
+    if (canAssignManager) {
+      api.get("/users/").then((res) => {
+        const list = Array.isArray(res.data) ? res.data : res.data?.results ?? [];
+        const pms = list.filter((u: { role: string }) => u.role === "project-manager");
+        if (isTechnicalDirector && user?.id) {
+          setManagersList(
+            pms.filter(
+              (u: { reports_to?: number; reports_to_details?: { id?: number } }) =>
+                u.reports_to === user.id || u.reports_to_details?.id === user.id,
+            ),
+          );
+        } else {
+          setManagersList(pms);
+        }
+      });
+    }
+  }, [canAssignManager, isTechnicalDirector, user?.id]);
 
   const handleAssignEngineer = async () => {
     if (!selectedEngineerId) return;
     try {
       setAssigningError("");
       const response = await api.patch(`/projects/${project.id}/`, { site_engineer: parseInt(selectedEngineerId) });
-      onUpdate(response.data);
+      onUpdate({ ...project, ...response.data });
       setIsAssigningEngineer(false);
     } catch (err) {
       setAssigningError("Failed to assign engineer");
+    }
+  };
+
+  const handleAssignManager = async () => {
+    if (!selectedManagerId) return;
+    try {
+      setAssigningError("");
+      const response = await api.patch(`/projects/${project.id}/`, {
+        manager: parseInt(selectedManagerId),
+      });
+      onUpdate({ ...project, ...response.data });
+      setIsAssigningManager(false);
+    } catch {
+      setAssigningError("Failed to assign project manager");
     }
   };
   return (
@@ -148,11 +167,47 @@ export function ProjectWorkspace({ project, onBack, onUpdate }: ProjectWorkspace
                 <span className="text-sm font-medium text-slate-500 flex items-center gap-2">
                   <HardHat size={16} /> Project Manager
                 </span>
-                <p className="text-slate-900 font-medium">
-                  {project.manager_details
-                    ? project.manager_details.full_name || project.manager_details.username || project.manager_details.email
-                    : "Unassigned"}
-                </p>
+                {canAssignManager && isAssigningManager ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedManagerId}
+                        onChange={(e) => setSelectedManagerId(e.target.value)}
+                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="">Select manager</option>
+                        {managersList.map((pm) => (
+                          <option key={pm.id} value={pm.id}>
+                            {pm.full_name || pm.username || pm.email}
+                          </option>
+                        ))}
+                      </select>
+                      <button onClick={handleAssignManager} className="p-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200">
+                        <Check size={16} />
+                      </button>
+                      <button onClick={() => setIsAssigningManager(false)} className="p-1.5 bg-slate-100 text-slate-700 rounded hover:bg-slate-200">
+                        <XIcon size={16} />
+                      </button>
+                    </div>
+                    {assigningError && <p className="text-xs text-red-600">{assigningError}</p>}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <p className="text-slate-900 font-medium">
+                      {project.manager_details
+                        ? project.manager_details.full_name || project.manager_details.username || project.manager_details.email
+                        : "Unassigned"}
+                    </p>
+                    {canAssignManager && (
+                      <button
+                        onClick={() => setIsAssigningManager(true)}
+                        className="text-xs text-blue-600 font-medium hover:text-blue-700 px-2 py-1 bg-blue-50 rounded"
+                      >
+                        {project.manager_details ? "Change" : "Assign"}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Site Engineer Section */}
@@ -191,12 +246,14 @@ export function ProjectWorkspace({ project, onBack, onUpdate }: ProjectWorkspace
                         ? project.site_engineer_details.full_name || project.site_engineer_details.username || project.site_engineer_details.email
                         : "Unassigned"}
                     </p>
-                    <button
-                      onClick={() => setIsAssigningEngineer(true)}
-                      className="text-xs text-blue-600 font-medium hover:text-blue-700 px-2 py-1 bg-blue-50 rounded"
-                    >
-                      {project.site_engineer_details ? "Change" : "Assign"}
-                    </button>
+                    {canAssignEngineer && (
+                      <button
+                        onClick={() => setIsAssigningEngineer(true)}
+                        className="text-xs text-blue-600 font-medium hover:text-blue-700 px-2 py-1 bg-blue-50 rounded"
+                      >
+                        {project.site_engineer_details ? "Change" : "Assign"}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -221,6 +278,12 @@ export function ProjectWorkspace({ project, onBack, onUpdate }: ProjectWorkspace
               </div>
             </div>
           </div>
+
+          <ProjectStaffPanel
+            project={project}
+            onUpdate={(updated) => onUpdate({ ...project, ...updated })}
+            compact
+          />
           
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
              <div className="flex items-center justify-between mb-6">

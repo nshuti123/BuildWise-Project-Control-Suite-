@@ -61,11 +61,6 @@ export function Sidebar({ activeModule, onModuleChange }: SidebarProps) {
       name: "Documents",
       icon: FolderOpen,
     },
-    {
-      id: "resources",
-      name: "Resources",
-      icon: Users,
-    },
   ];
   return (
     <div className="w-64 bg-slate-900 text-white h-[125vh] fixed left-0 top-0 flex flex-col">

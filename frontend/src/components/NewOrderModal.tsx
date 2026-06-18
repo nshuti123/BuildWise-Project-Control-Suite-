@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from "lucide-react";
 import api from "../api";
+import { asList, formatApiError } from "../utils/apiHelpers";
 
 interface Supplier {
+  id: number;
+  name: string;
+}
+
+interface Project {
   id: number;
   name: string;
 }
@@ -20,6 +26,7 @@ interface NewOrderModalProps {
   onClose: () => void;
   onOrderCreated: () => void;
   initialMaterialId?: string;
+  defaultProjectId?: number | null;
 }
 
 export function NewOrderModal({
@@ -27,10 +34,13 @@ export function NewOrderModal({
   onClose,
   onOrderCreated,
   initialMaterialId,
+  defaultProjectId = null,
 }: NewOrderModalProps) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
 
+  const [selectedProject, setSelectedProject] = useState("");
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [selectedMaterial, setSelectedMaterial] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -38,6 +48,7 @@ export function NewOrderModal({
   const today = new Date().toISOString().split("T")[0];
   const [orderDate, setOrderDate] = useState(today);
   const [deliveryDate, setDeliveryDate] = useState("");
+  const [orderType, setOrderType] = useState("material");
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -60,17 +71,22 @@ export function NewOrderModal({
       if (initialMaterialId) {
         setSelectedMaterial(initialMaterialId);
       }
+      if (defaultProjectId) {
+        setSelectedProject(String(defaultProjectId));
+      }
     }
-  }, [isOpen, initialMaterialId]);
+  }, [isOpen, initialMaterialId, defaultProjectId]);
 
   const fetchFormData = async () => {
     try {
-      const [suppliersRes, materialsRes] = await Promise.all([
+      const [suppliersRes, materialsRes, projectsRes] = await Promise.all([
         api.get("/procurement/suppliers/"),
         api.get("/procurement/materials/"),
+        api.get("/projects/"),
       ]);
-      setSuppliers(suppliersRes.data);
-      setMaterials(materialsRes.data);
+      setSuppliers(asList(suppliersRes.data));
+      setMaterials(asList(materialsRes.data));
+      setProjects(asList(projectsRes.data));
     } catch (err) {
       console.error("Failed to fetch form data", err);
       setError("Failed to load suppliers and materials. Please try again.");
@@ -82,30 +98,40 @@ export function NewOrderModal({
     setError("");
     setIsLoading(true);
 
+    const parsedTotal = parseFloat(totalAmount);
+    if (!selectedProject || !selectedSupplier || !selectedMaterial || !quantity) {
+      setError("Please complete all required fields.");
+      setIsLoading(false);
+      return;
+    }
+    if (!Number.isFinite(parsedTotal) || parsedTotal <= 0) {
+      setError("Enter a quantity so the total amount is greater than zero.");
+      setIsLoading(false);
+      return;
+    }
+    if (deliveryDate && deliveryDate < orderDate) {
+      setError("Delivery date cannot be earlier than the order date.");
+      setIsLoading(false);
+      return;
+    }
+
     try {
       await api.post("/procurement/orders/", {
-        po_number: `PO-${new Date().getFullYear()}-${Math.floor(
-          Math.random() * 10000,
-        )
-          .toString()
-          .padStart(4, "0")}`,
-        supplier: selectedSupplier,
-        material: selectedMaterial,
-        quantity: quantity,
-        total_amount: totalAmount,
-        status: "pending",
+        supplier: Number(selectedSupplier),
+        material: Number(selectedMaterial),
+        project: Number(selectedProject),
+        quantity,
+        total_amount: parsedTotal.toFixed(2),
+        order_type: orderType,
         order_date: orderDate,
         delivery_date: deliveryDate || null,
       });
 
       onOrderCreated(); // Trigger refresh on parent
       handleClose(); // Close the modal and reset
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to create order", err);
-      setError(
-        err.response?.data?.detail ||
-          "Failed to create order. Please check inputs.",
-      );
+      setError(formatApiError(err, "Failed to create order. Please check inputs."));
     } finally {
       setIsLoading(false);
     }
@@ -113,11 +139,13 @@ export function NewOrderModal({
 
   const handleClose = () => {
     // Reset form state
+    setSelectedProject("");
     setSelectedSupplier("");
     setSelectedMaterial("");
     setQuantity("");
     setTotalAmount("");
     setDeliveryDate("");
+    setOrderType("material");
     setError("");
     onClose();
   };
@@ -148,6 +176,42 @@ export function NewOrderModal({
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Link to Project (Required for Cost Automation)
+              </label>
+              <select
+                required
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value="" disabled>
+                  Select a project...
+                </option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Order Type
+              </label>
+              <select
+                required
+                value={orderType}
+                onChange={(e) => setOrderType(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value="material">Materials</option>
+                <option value="equipment">Equipment</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Supplier
@@ -232,7 +296,13 @@ export function NewOrderModal({
                   type="date"
                   min={today}
                   value={orderDate}
-                  onChange={(e) => setOrderDate(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setOrderDate(next);
+                    if (deliveryDate && deliveryDate < next) {
+                      setDeliveryDate("");
+                    }
+                  }}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>

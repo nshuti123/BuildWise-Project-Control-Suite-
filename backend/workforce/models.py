@@ -59,14 +59,62 @@ class DailyPayroll(models.Model):
     date = models.DateField()
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     STATUS_CHOICES = [
-        ('pending', 'Pending Approval'),
+        ('awaiting_site_engineer', 'Awaiting Site Engineer'),
+        ('awaiting_finance', 'Awaiting Finance Approval'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
-        ('paid', 'Paid')
+        ('paid', 'Paid'),
+        # legacy
+        ('pending', 'Pending Approval'),
     ]
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    initiated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='initiated_payrolls')
-    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='approved_payrolls', blank=True)
+    status = models.CharField(
+        max_length=32,
+        choices=STATUS_CHOICES,
+        default='awaiting_site_engineer',
+    )
+    initiated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name='initiated_payrolls'
+    )
+    site_confirmed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='site_confirmed_payrolls',
+    )
+    site_confirmed_at = models.DateTimeField(null=True, blank=True)
+    accountant_approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='accountant_approved_payrolls',
+    )
+    accountant_approved_at = models.DateTimeField(null=True, blank=True)
+    director_finance_approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='df_approved_payrolls',
+    )
+    director_finance_approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_payrolls',
+    )
+    rejected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rejected_payrolls',
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
 

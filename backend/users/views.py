@@ -1,14 +1,26 @@
 import psutil
 import time
+from django.db.models import Q
 from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView, ListAPIView
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from .models import CustomUser, SystemLog, Notification, PasswordResetOTP, Message
-from .serializers import CustomUserSerializer, CustomTokenObtainPairSerializer, SystemLogSerializer, NotificationSerializer, RequestPasswordResetSerializer, VerifyPasswordResetSerializer, MessageSerializer
-from .permissions import IsAdmin
+from rest_framework.parsers import MultiPartParser, FormParser
+from .models import CustomUser, SystemLog, Notification, PasswordResetOTP, Message, Announcement
+from .serializers import (
+    CustomUserSerializer,
+    CustomTokenObtainPairSerializer,
+    SystemLogSerializer,
+    NotificationSerializer,
+    RequestPasswordResetSerializer,
+    VerifyPasswordResetSerializer,
+    MessageSerializer,
+    AnnouncementSerializer,
+)
+from .permissions import IsAdmin, IsExecutive
+from .services import get_subordinate_user_ids
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -27,10 +39,12 @@ class UserProfileView(APIView):
         serializer = CustomUserSerializer(user, data=request.data, partial=True, context={"request": request})
         if serializer.is_valid():
             # Prevent users from elevating their privileges
-            if 'role' in serializer.validated_data and user.role != 'admin':
+            if 'role' in serializer.validated_data and user.role not in ('admin', 'managing-director'):
                 serializer.validated_data.pop('role')
-            if 'is_active' in serializer.validated_data and user.role != 'admin':
+            if 'is_active' in serializer.validated_data and user.role not in ('admin', 'managing-director'):
                 serializer.validated_data.pop('is_active')
+            if 'reports_to' in serializer.validated_data and user.role not in ('admin', 'managing-director'):
+                serializer.validated_data.pop('reports_to')
                 
             serializer.save()
             return Response(serializer.data)
@@ -39,16 +53,90 @@ class UserProfileView(APIView):
 class UserListView(ListCreateAPIView):
     queryset = CustomUser.objects.all().order_by('-date_joined')
     serializer_class = CustomUserSerializer
-    
+
     def get_permissions(self):
         if self.request.method == 'GET':
             return [IsAuthenticated()]
-        return [IsAuthenticated(), IsAdmin()]
+        if self.request.method == 'POST':
+            from .services import user_can_manage_users
+            if user_can_manage_users(self.request.user):
+                return [IsAuthenticated()]
+            return [IsAuthenticated(), IsAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        from .services import user_can_view_all_users
+        user = self.request.user
+        qs = CustomUser.objects.all().order_by('-date_joined')
+        if user_can_view_all_users(user):
+            return qs
+        if user.role == 'director-finance':
+            sub_ids = get_subordinate_user_ids(user)
+            return qs.filter(Q(id=user.id) | Q(id__in=sub_ids) | Q(reports_to=user))
+        return qs.filter(id=user.id)
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        from .audit import log_system_event
+        log_system_event(
+            f'Created user account "{user.username}" ({user.get_role_display()})',
+            user=self.request.user,
+            log_type='user',
+        )
 
 class UserDetailView(RetrieveUpdateDestroyAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = CustomUserSerializer
-    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_permissions(self):
+        if self.request.method in ('PUT', 'PATCH', 'DELETE'):
+            from .services import user_can_manage_users
+            if user_can_manage_users(self.request.user):
+                return [IsAuthenticated()]
+            return [IsAuthenticated(), IsAdmin()]
+        return [IsAuthenticated()]
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        was_active = instance.is_active
+        old_role = instance.role
+        user = serializer.save()
+        from .audit import log_system_event
+        actor = self.request.user
+        if was_active and not user.is_active:
+            log_system_event(
+                f'Deactivated user account "{user.username}"',
+                user=actor,
+                log_type='security',
+            )
+        elif not was_active and user.is_active:
+            log_system_event(
+                f'Reactivated user account "{user.username}"',
+                user=actor,
+                log_type='user',
+            )
+        elif old_role != user.role:
+            log_system_event(
+                f'Changed role for "{user.username}" to {user.get_role_display()}',
+                user=actor,
+                log_type='security',
+            )
+        else:
+            log_system_event(
+                f'Updated user account "{user.username}"',
+                user=actor,
+                log_type='user',
+            )
+
+    def perform_destroy(self, instance):
+        from .audit import log_system_event
+        username = instance.username
+        log_system_event(
+            f'Deleted user account "{username}"',
+            user=self.request.user,
+            log_type='security',
+        )
+        instance.delete()
 
 import random
 from django.core.mail import send_mail
@@ -70,6 +158,13 @@ class RequestPasswordResetView(APIView):
                 PasswordResetOTP.objects.filter(user=user).delete()
                 # Create new OTP
                 PasswordResetOTP.objects.create(user=user, otp=otp)
+
+                from .audit import log_system_event
+                log_system_event(
+                    f'Password reset requested for account "{user.username}"',
+                    user=user,
+                    log_type='security',
+                )
                 
                 # Send email
                 send_mail(
@@ -136,6 +231,54 @@ class NotificationViewSet(viewsets.ModelViewSet):
         self.get_queryset().update(is_read=True)
         return Response({'status': 'All notifications marked as read'})
 
+class AnnouncementViewSet(viewsets.ModelViewSet):
+    serializer_class = AnnouncementSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action in ("create", "update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsExecutive()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        if (
+            getattr(self.request.user, "role", None)
+            in ("admin", "managing-director", "technical-director", "director-finance")
+            and self.request.query_params.get("manage") == "1"
+        ):
+            return Announcement.objects.select_related("created_by").order_by(
+                "-created_at"
+            )
+        from users.announcement_service import announcement_queryset_for_user
+
+        return announcement_queryset_for_user(self.request.user)
+
+    def perform_create(self, serializer):
+        from users.announcement_service import notify_audience
+
+        announcement = serializer.save(created_by=self.request.user)
+        notify_audience(announcement)
+
+    @action(detail=True, methods=["post"])
+    def acknowledge(self, request, pk=None):
+        from users.models import AnnouncementAcknowledgment
+        from users.announcement_service import user_can_see_announcement
+
+        announcement = self.get_object()
+        if not user_can_see_announcement(request.user, announcement):
+            return Response(
+                {"detail": "You cannot acknowledge this announcement."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        AnnouncementAcknowledgment.objects.get_or_create(
+            announcement=announcement, user=request.user
+        )
+        return Response(
+            AnnouncementSerializer(announcement, context={"request": request}).data
+        )
+
+
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
@@ -147,7 +290,24 @@ class MessageViewSet(viewsets.ModelViewSet):
         ).order_by('-timestamp')
 
     def perform_create(self, serializer):
-        serializer.save(sender=self.request.user)
+        from rest_framework.exceptions import PermissionDenied
+        from users.message_recipients import user_may_message_recipient
+
+        recipient = serializer.validated_data.get('recipient')
+        if recipient and not user_may_message_recipient(self.request.user, recipient):
+            raise PermissionDenied(
+                'You can only message users on your project team or in your reporting line.'
+            )
+        msg = serializer.save(sender=self.request.user)
+        if msg.recipient_id and msg.recipient_id != self.request.user.id:
+            sender_name = self.request.user.full_name or self.request.user.username
+            preview = (msg.body or '')[:120]
+            Notification.objects.create(
+                user=msg.recipient,
+                title='New message',
+                message=f'{sender_name}: {preview}',
+                link='communication',
+            )
 
     @action(detail=True, methods=['patch'])
     def mark_read(self, request, pk=None):
@@ -157,10 +317,103 @@ class MessageViewSet(viewsets.ModelViewSet):
             msg.save()
         return Response(MessageSerializer(msg).data)
 
+class MessageRecipientsView(APIView):
+    """Users the current account is allowed to message (for compose UI)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from users.message_recipients import get_message_recipients_queryset
+
+        qs = get_message_recipients_queryset(request.user)
+        serializer = CustomUserSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class OrgChartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        users = CustomUser.objects.filter(is_active=True).select_related('reports_to')
+        nodes = []
+        for u in users:
+            nodes.append({
+                'id': u.id,
+                'name': u.full_name or u.username,
+                'role': u.role,
+                'department': u.department,
+                'job_title': u.job_title,
+                'reports_to_id': u.reports_to_id,
+            })
+        return Response(nodes)
+
+
+class SubordinatesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sub_ids = get_subordinate_user_ids(request.user)
+        subordinates = CustomUser.objects.filter(id__in=sub_ids, is_active=True)
+        serializer = CustomUserSerializer(subordinates, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class SendReportEmailView(APIView):
+    """Send a report email with optional generated PDF and custom attachments (no project scope)."""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        from rest_framework.response import Response
+        from projects.report_email import send_report_email, CUSTOM_ATTACHMENT_HELP
+
+        to_email = (request.data.get('email') or '').strip()
+        subject = (request.data.get('subject') or 'BuildWise Report').strip()
+        message = (request.data.get('message') or '').strip()
+        if not to_email:
+            return Response({'detail': 'Recipient email is required.'}, status=400)
+
+        exporter = request.user.full_name or request.user.username
+        body = (
+            f"Hello,\n\n"
+            f"{exporter} shared a report from BuildWise.\n\n"
+        )
+        if message:
+            body += f"{message.strip()}\n\n"
+        body += f"Note: {CUSTOM_ATTACHMENT_HELP}\n\nRegards,\nBuildWise Project Control Suite"
+
+        report_file = request.FILES.get('report')
+        extra = request.FILES.getlist('attachments')
+        try:
+            send_report_email(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                report_bytes=report_file.read() if report_file else None,
+                report_filename=report_file.name if report_file else None,
+                report_mimetype=getattr(report_file, 'content_type', None) or 'application/pdf',
+                extra_attachments=extra,
+            )
+        except Exception as exc:
+            return Response(
+                {'detail': f'Failed to send email. Check server mail settings. ({exc})'},
+                status=500,
+            )
+        return Response({'detail': f'Report emailed to {to_email}.'})
+
+
 class SystemLogListView(ListAPIView):
-    queryset = SystemLog.objects.all().order_by('-timestamp')
     serializer_class = SystemLogSerializer
     permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        qs = SystemLog.objects.select_related('user').order_by('-timestamp')
+        log_type = self.request.query_params.get('type')
+        if log_type:
+            qs = qs.filter(type=log_type)
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(action__icontains=search)
+        return qs
 
 BOOT_TIME = psutil.boot_time()
 

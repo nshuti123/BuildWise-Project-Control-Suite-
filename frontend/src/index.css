@@ -25,3 +25,27 @@ body {
   /* To counter the 80% zoom which makes 100vh only cover 80% of the screen */
   min-height: 125vh;
 }
+
+@media print {
+  body {
+    zoom: 1;
+    min-height: auto;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .site-inventory-print-root,
+  .site-inventory-print-root * {
+    visibility: visible;
+  }
+  .site-inventory-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    visibility: visible;
+    overflow: visible;
+    height: auto;
+    opacity: 1;
+  }
+}

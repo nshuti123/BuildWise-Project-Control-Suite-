@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Users,
   UserPlus,
@@ -8,11 +8,22 @@ import {
   Search,
   DollarSign,
   CalendarIcon as LucideCalendar,
+  Eye,
+  XCircle,
+  History,
 } from "lucide-react";
 import api from "../api";
 import { AddWorkerModal } from "../components/AddWorkerModal";
+import { useProject } from "../context/ProjectContext";
+import { useAuth } from "../context/AuthContext";
+import { getWorkforceCapabilities } from "../utils/roleCapabilities";
 import { WorkerDetailsModal } from "../components/WorkerDetailsModal";
 import { ConfirmActionModal } from "../components/ConfirmActionModal";
+import { Pagination } from "../components/Pagination";
+import { asList, formatApiError } from "../utils/apiHelpers";
+import { consumeWorkforcePayrollReview } from "../utils/workforceNavigation";
+import { TableReportActions } from "../components/TableReportActions";
+import type { TableReportData } from "../utils/tableReportExport";
 
 export function WorkforceManagement() {
   const [workers, setWorkers] = useState<any[]>([]);
@@ -27,37 +38,106 @@ export function WorkforceManagement() {
   const [activeTab, setActiveTab] = useState<"directory" | "attendance">(
     "directory",
   );
-  const [isPayrollLocked, setIsPayrollLocked] = useState(false);
+  const [currentPayroll, setCurrentPayroll] = useState<any | null>(null);
+  const [payrollHistory, setPayrollHistory] = useState<any[]>([]);
   const [attendanceDate, setAttendanceDate] = useState(
     new Date().toISOString().split("T")[0],
   );
-  const projectId = 1;
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  
+  const { currentProjectId: projectId } = useProject();
+  const { user } = useAuth();
+  const workforceCaps = getWorkforceCapabilities(user?.role);
+  const directToFinanceInitiates =
+    user?.role === "site-engineer" || user?.role === "technical-director";
 
   useEffect(() => {
-    fetchWorkers();
-  }, []);
+    const review = consumeWorkforcePayrollReview();
+    if (review?.tab) setActiveTab(review.tab);
+    if (review?.date) setAttendanceDate(review.date);
+  }, [projectId]);
 
   useEffect(() => {
-    if (activeTab === "attendance") {
+    if (activeTab === "attendance" && projectId) {
       fetchAttendances();
       fetchPayrollStatus();
+      fetchPayrollHistory();
     }
-  }, [activeTab, attendanceDate]);
+  }, [activeTab, attendanceDate, projectId]);
+
+  const fetchPayrollHistory = async () => {
+    try {
+      const resp = await api.get(`/workforce/payrolls/?project=${projectId}`);
+      const list = asList(resp.data).filter(
+        (p: any) => p.status === "approved" || p.status === "rejected",
+      );
+      list.sort(
+        (a: any, b: any) =>
+          new Date(b.date).getTime() - new Date(a.date).getTime(),
+      );
+      setPayrollHistory(list.slice(0, 12));
+    } catch (err) {
+      console.error(err);
+      setPayrollHistory([]);
+    }
+  };
 
   const fetchPayrollStatus = async () => {
     try {
-       const resp = await api.get(`/workforce/payrolls/?project=${projectId}&date=${attendanceDate}`);
-       setIsPayrollLocked(resp.data.length > 0);
-    } catch(err) {
-       console.error(err);
+      const resp = await api.get(
+        `/workforce/payrolls/?project=${projectId}&date=${attendanceDate}`,
+      );
+      const list = asList(resp.data);
+      const active = list.find((p: any) => p.status !== "rejected") ?? null;
+      setCurrentPayroll(active);
+    } catch (err) {
+      console.error(err);
+      setCurrentPayroll(null);
     }
-  }
+  };
 
-  const fetchWorkers = async () => {
+  useEffect(() => {
+    if (projectId) {
+      fetchWorkers(currentPage);
+    }
+  }, [currentPage, projectId]);
+
+  const isAwaitingSiteEngineer =
+    currentPayroll?.status === "awaiting_site_engineer" ||
+    currentPayroll?.status === "pending";
+
+  const isPayrollLocked =
+    !!currentPayroll &&
+    currentPayroll.status !== "rejected" &&
+    !(
+      workforceCaps.canEditAttendanceDuringPayrollReview && isAwaitingSiteEngineer
+    );
+
+  const payrollStatusLabel: Record<string, string> = {
+    awaiting_site_engineer: "Awaiting site engineer confirmation",
+    awaiting_finance: "Awaiting finance department approval",
+    approved: "Approved — labor budget updated",
+    rejected: "Rejected",
+    pending: "Awaiting site engineer confirmation",
+  };
+
+  const fetchWorkers = async (page: number = 1) => {
     try {
-      const resp = await api.get(`/workforce/workers/?project=${projectId}`);
+      const resp = await api.get(`/workforce/workers/?project=${projectId}&page=${page}`);
       const allWorkers = resp.data;
       setWorkers(allWorkers);
+      
+      const authResp = resp as any;
+      if (authResp.pagination) {
+        setTotalItems(authResp.pagination.count);
+        setTotalPages(Math.ceil(authResp.pagination.count / 10));
+      } else {
+        setTotalItems(allWorkers.length);
+        setTotalPages(1);
+      }
       
       const today = new Date();
       const expiring = allWorkers.filter((w: any) => {
@@ -89,6 +169,7 @@ export function WorkforceManagement() {
     status: string,
     existingId: number | null,
   ) => {
+    if (!workforceCaps.canMarkAttendance) return;
     if (isPayrollLocked) {
          setConfirmModal({
              isOpen: true,
@@ -111,6 +192,7 @@ export function WorkforceManagement() {
         });
       }
       fetchAttendances();
+      await fetchPayrollStatus();
     } catch (err: any) {
       setConfirmModal({
           isOpen: true,
@@ -118,6 +200,28 @@ export function WorkforceManagement() {
           message: err.response?.data?.detail || "Failed to update attendance records.",
           type: "danger",
           onConfirm: () => {}
+      });
+    }
+  };
+
+  const handleUpdateNotes = async (existingId: number, notes: string) => {
+    try {
+      await api.patch(`/workforce/attendances/${existingId}/`, { notes });
+      fetchAttendances();
+      setConfirmModal({
+        isOpen: true,
+        title: "Comment Submitted",
+        message: "Your comment was successfully saved and the Project Manager has been notified.",
+        type: "success",
+        onConfirm: () => {}
+      });
+    } catch (err: any) {
+      setConfirmModal({
+        isOpen: true,
+        title: "Action Denied",
+        message: err.response?.data?.detail || "Failed to update notes.",
+        type: "danger",
+        onConfirm: () => {}
       });
     }
   };
@@ -150,34 +254,109 @@ export function WorkforceManagement() {
   const handleInitiatePayrollClick = () => {
     setConfirmModal({
       isOpen: true,
-      title: "Generate Daily Payroll",
-      message: `Are you sure you want to lock the attendance logs and generate payroll for ${attendanceDate}? This action will calculate earnings based on current attendance.`,
+      title: "Submit daily payroll",
+      message: directToFinanceInitiates
+        ? `Submit payroll for ${attendanceDate} to the finance department? Attendance will be locked until the batch is rejected.`
+        : `Submit payroll for ${attendanceDate} to the site engineer? Attendance will be locked until the batch is rejected.`,
       type: "info",
       onConfirm: async () => {
         try {
-          const resp = await api.post('/workforce/payrolls/initiate/', { project: projectId, date: attendanceDate });
-          setTimeout(() => {
-            setConfirmModal({
-              isOpen: true,
-              title: "Payroll Successful!",
-              message: `Payroll batch generated successfully! Total Amount: ${resp.data.total_amount} Rwf.`,
-              type: "success",
-              onConfirm: () => {}
-            });
-            setIsPayrollLocked(true);
-          }, 400);
-        } catch (err: any) {
-          setTimeout(() => {
-            setConfirmModal({
-              isOpen: true,
-              title: "Initiation Failed",
-              message: err.response?.data?.detail || 'Error initiating payroll. A record might already exist or there are no attendance logs for today.',
-              type: "danger",
-              onConfirm: () => {}
-            });
-          }, 400);
+          const resp = await api.post("/workforce/payrolls/initiate/", {
+            project: projectId,
+            date: attendanceDate,
+          });
+          await fetchPayrollStatus();
+          await fetchPayrollHistory();
+          setConfirmModal({
+            isOpen: true,
+            title: "Payroll submitted",
+            message: directToFinanceInitiates
+              ? `Sent to the finance department. Total: ${Number(resp.data.total_amount).toLocaleString()} Rwf.`
+              : `Sent to site engineer for confirmation. Total: ${Number(resp.data.total_amount).toLocaleString()} Rwf.`,
+            type: "success",
+            onConfirm: () => {},
+          });
+        } catch (err: unknown) {
+          setConfirmModal({
+            isOpen: true,
+            title: "Submission failed",
+            message: formatApiError(
+              err,
+              "Could not initiate payroll. Check attendance and try again.",
+            ),
+            type: "danger",
+            onConfirm: () => {},
+          });
         }
-      }
+      },
+    });
+  };
+
+  const handleConfirmPayrollSite = () => {
+    if (!currentPayroll) return;
+    setConfirmModal({
+      isOpen: true,
+      title: "Approve payroll",
+      message: `Approve ${Number(currentPayroll.total_amount).toLocaleString()} Rwf for ${attendanceDate} and send to the finance department for approval?`,
+      type: "info",
+      onConfirm: async () => {
+        try {
+          await api.post(`/workforce/payrolls/${currentPayroll.id}/confirm-site/`);
+          await fetchPayrollStatus();
+          await fetchPayrollHistory();
+          setConfirmModal({
+            isOpen: true,
+            title: "Approved",
+            message:
+              "The finance department can now approve or reject this payment request. The site foreman has been notified.",
+            type: "success",
+            onConfirm: () => {},
+          });
+        } catch (err: any) {
+          setConfirmModal({
+            isOpen: true,
+            title: "Approval failed",
+            message: err.response?.data?.detail || "Could not approve payroll.",
+            type: "danger",
+            onConfirm: () => {},
+          });
+        }
+      },
+    });
+  };
+
+  const handleViewPayrollReview = () => {
+    document
+      .getElementById("attendance-review-grid")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleRejectPayrollSite = () => {
+    if (!currentPayroll) return;
+    setConfirmModal({
+      isOpen: true,
+      title: "Reject payroll",
+      message:
+        "Reject this payroll? The site foreman will be notified immediately and finance will not see this request. Attendance can be edited again for this date.",
+      type: "danger",
+      onConfirm: async () => {
+        try {
+          await api.post(`/workforce/payrolls/${currentPayroll.id}/reject/`, {
+            reason: "Rejected by site engineer",
+          });
+          await fetchPayrollStatus();
+          await fetchPayrollHistory();
+          fetchAttendances();
+        } catch (err: any) {
+          setConfirmModal({
+            isOpen: true,
+            title: "Rejection failed",
+            message: err.response?.data?.detail || "Could not reject.",
+            type: "danger",
+            onConfirm: () => {},
+          });
+        }
+      },
     });
   };
 
@@ -195,24 +374,73 @@ export function WorkforceManagement() {
     );
   });
 
+  const workersDirectoryReport = useMemo((): TableReportData => {
+    const columns = ["Worker", "Role / Trade", "Phone", "Daily Rate (Rwf)", "Status"];
+    const rows = filteredWorkers.map((w) => [
+      `${w.first_name} ${w.last_name}`,
+      w.role,
+      w.phone_number ?? "—",
+      w.daily_rate != null ? String(w.daily_rate) : "—",
+      w.is_active === false ? "Inactive" : "Active",
+    ]);
+    return {
+      title: "Personnel Directory",
+      subtitle: `${filteredWorkers.length} workers`,
+      filename: `Workforce_Directory_${projectId ?? "project"}`,
+      columns,
+      rows,
+    };
+  }, [filteredWorkers, projectId]);
+
+  const attendanceReport = useMemo((): TableReportData => {
+    const columns = ["Worker", "Role", "Present", "Hours", "Notes"];
+    const rows = filteredWorkers.map((w) => {
+      const record = attendances.find((a) => a.worker === w.id);
+      return [
+        `${w.first_name} ${w.last_name}`,
+        w.role,
+        record?.present ? "Yes" : record ? "No" : "—",
+        record?.hours_worked != null ? String(record.hours_worked) : "—",
+        record?.notes ?? "—",
+      ];
+    });
+    return {
+      title: `Daily Attendance — ${attendanceDate}`,
+      subtitle: `${filteredWorkers.length} workers`,
+      filename: `Attendance_${attendanceDate}_${projectId ?? "project"}`,
+      columns,
+      rows,
+    };
+  }, [filteredWorkers, attendances, attendanceDate, projectId]);
+
   return (
     <div className="space-y-6 animate-fade-in pb-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            Workforce Management
-          </h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold text-slate-900">
+              Workforce Management
+            </h1>
+          </div>
           <p className="text-slate-600">
-            Register manual labor and track site attendance
+            {workforceCaps.canInitiatePayroll
+              ? user?.role === "technical-director"
+                ? "Register crew, mark attendance, and initiate worker payments for the selected project"
+                : "Register manual labor and track site attendance"
+              : "Register crew on site and mark daily attendance"}
           </p>
         </div>
-        <button
-          onClick={() => openAppModal()}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm"
-        >
-          <UserPlus size={18} />
-          <span className="font-medium text-sm">Add Worker</span>
-        </button>
+        {workforceCaps.canAddWorker && (
+          <button
+            type="button"
+            onClick={() => openAppModal()}
+            disabled={!projectId}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm disabled:opacity-50"
+          >
+            <UserPlus size={18} />
+            <span className="font-medium text-sm">Add Worker</span>
+          </button>
+        )}
       </div>
 
       <div className="flex items-center justify-between border-b border-slate-200">
@@ -269,7 +497,7 @@ export function WorkforceManagement() {
                  return (
                  <button 
                    key={w.id} 
-                   onClick={() => openAppModal(w)}
+                   onClick={() => workforceCaps.canEditWorker ? openAppModal(w) : openDetailsModal(w)}
                    className="flex items-center gap-2 bg-white/80 backdrop-blur border border-orange-200 hover:border-orange-400 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:shadow-md hover:-translate-y-0.5"
                  >
                    <span className="text-slate-800">{w.first_name} {w.last_name}</span>
@@ -285,6 +513,14 @@ export function WorkforceManagement() {
 
       {activeTab === "directory" && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="px-6 py-3 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-medium text-slate-600">Export personnel directory</p>
+            <TableReportActions
+              report={workersDirectoryReport}
+              projectId={projectId ?? undefined}
+              disabled={filteredWorkers.length === 0}
+            />
+          </div>
           <table className="w-full text-sm text-left">
             <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
               <tr>
@@ -303,9 +539,11 @@ export function WorkforceManagement() {
                 <th className="px-6 py-4 uppercase text-xs tracking-wider text-right">
                   Status
                 </th>
-                <th className="px-6 py-4 uppercase text-xs tracking-wider text-right">
-                  Actions
-                </th>
+                {(workforceCaps.canEditWorker || workforceCaps.canDeleteWorker) && (
+                  <th className="px-6 py-4 uppercase text-xs tracking-wider text-right">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -337,35 +575,43 @@ export function WorkforceManagement() {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-3 text-slate-400">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openAppModal(worker);
-                        }}
-                        className="hover:text-blue-600 transition-colors p-1"
-                        title="Edit Worker"
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteWorker(worker.id);
-                        }}
-                        className="hover:text-red-500 transition-colors p-1"
-                        title="Remove Worker"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                    {(workforceCaps.canEditWorker || workforceCaps.canDeleteWorker) && (
+                      <div className="flex items-center justify-end gap-3 text-slate-400">
+                        {workforceCaps.canEditWorker && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAppModal(worker);
+                            }}
+                            className="hover:text-blue-600 transition-colors p-1"
+                            title="Edit Worker"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                        )}
+                        {workforceCaps.canDeleteWorker && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteWorker(worker.id);
+                            }}
+                            className="hover:text-red-500 transition-colors p-1"
+                            title="Remove Worker"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
               {filteredWorkers.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={
+                      workforceCaps.canEditWorker || workforceCaps.canDeleteWorker ? 6 : 5
+                    }
                     className="px-6 py-8 text-center text-slate-400"
                   >
                     {workers.length === 0
@@ -376,12 +622,18 @@ export function WorkforceManagement() {
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={setCurrentPage}
+            totalItems={totalItems}
+          />
         </div>
       )}
 
       {activeTab === "attendance" && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
             <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm inline-flex">
               <CalendarIcon />
               <label className="text-sm font-bold text-slate-700">
@@ -394,17 +646,152 @@ export function WorkforceManagement() {
                 className="border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-600 outline-none text-sm font-bold text-blue-700 bg-white"
               />
             </div>
+
+            <TableReportActions
+              report={attendanceReport}
+              projectId={projectId ?? undefined}
+              disabled={filteredWorkers.length === 0}
+            />
             
-            <button 
-              onClick={handleInitiatePayrollClick}
-              className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition-colors"
-            >
-              <DollarSign size={18} />
-              Initiate Daily Payroll
-            </button>
+            {workforceCaps.canInitiatePayroll && !currentPayroll && (
+              <button
+                type="button"
+                onClick={handleInitiatePayrollClick}
+                className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition-colors"
+              >
+                <DollarSign size={18} />
+                {directToFinanceInitiates
+                  ? user?.role === "technical-director"
+                    ? "Initiate Worker Payment"
+                    : "Submit to Finance Department"
+                  : "Submit to Site Engineer"}
+              </button>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {currentPayroll && (
+            <div
+              className={`rounded-xl border p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                currentPayroll.status === "approved"
+                  ? "bg-green-50 border-green-200"
+                  : currentPayroll.status === "rejected"
+                    ? "bg-red-50 border-red-200"
+                    : "bg-amber-50 border-amber-200"
+              }`}
+            >
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                  Payroll batch #{currentPayroll.id}
+                </p>
+                <p className="text-lg font-bold text-slate-900 mt-1">
+                  {Number(currentPayroll.total_amount).toLocaleString()} Rwf ·{" "}
+                  {payrollStatusLabel[currentPayroll.status] || currentPayroll.status}
+                </p>
+                <p className="text-xs text-slate-600 mt-1">
+                  Initiated by {currentPayroll.initiated_by_name}
+                  {currentPayroll.site_confirmed_by_name &&
+                    ` · Confirmed by ${currentPayroll.site_confirmed_by_name}`}
+                </p>
+                {isAwaitingSiteEngineer && workforceCaps.canConfirmPayroll && (
+                  <p className="text-xs mt-2 text-amber-800">
+                    Review attendance below, then approve to send to the finance department or reject
+                    to return to the foreman.
+                  </p>
+                )}
+                {currentPayroll.status === "awaiting_finance" && (
+                  <p className="text-xs mt-2 text-slate-700">
+                    Sent to the finance department for approval.
+                  </p>
+                )}
+                {currentPayroll.status === "approved" && (
+                  <p className="text-xs mt-2 text-green-800">
+                    Approved by{" "}
+                    {currentPayroll.approved_by_name ||
+                      currentPayroll.accountant_approved_by_name ||
+                      currentPayroll.director_finance_approved_by_name ||
+                      "finance"}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {workforceCaps.canConfirmPayroll && isAwaitingSiteEngineer && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleViewPayrollReview}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-white border border-amber-300 text-amber-900 text-sm font-semibold rounded-lg hover:bg-amber-50"
+                    >
+                      <Eye size={16} />
+                      View & edit attendance
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmPayrollSite}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700"
+                    >
+                      <CheckCircle2 size={16} />
+                      Approve & send to finance
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRejectPayrollSite}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-red-100 text-red-700 text-sm font-semibold rounded-lg hover:bg-red-200"
+                    >
+                      <XCircle size={16} />
+                      Reject
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {(workforceCaps.canInitiatePayroll || workforceCaps.canConfirmPayroll) &&
+            payrollHistory.length > 0 && (
+              <div className="bg-white rounded-xl border border-slate-200 p-4">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-3">
+                  <History size={16} className="text-slate-500" />
+                  Payroll history
+                </h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {payrollHistory.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between text-sm py-2 border-b border-slate-100 last:border-0"
+                    >
+                      <div>
+                        <span className="font-medium text-slate-900">{p.date}</span>
+                        <span className="text-slate-500 ml-2">
+                          Batch #{p.id}
+                        </span>
+                        {p.status === "approved" && (
+                          <span className="text-xs text-green-700 ml-2">
+                            · {p.approved_by_name || "Approved"}
+                          </span>
+                        )}
+                        {p.status === "rejected" && (
+                          <span className="text-xs text-red-600 ml-2">· Rejected</span>
+                        )}
+                      </div>
+                      <span
+                        className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          p.status === "approved"
+                            ? "bg-green-100 text-green-800"
+                            : "bg-red-100 text-red-800"
+                        }`}
+                      >
+                        {Number(p.total_amount).toLocaleString()} Rwf
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+          <div
+            id="attendance-review-grid"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+          >
             {filteredWorkers.map((worker) => {
               const record = getWorkerAttendance(worker.id);
               return (
@@ -432,7 +819,7 @@ export function WorkforceManagement() {
                           record?.id || null,
                         )
                       }
-                      disabled={isPayrollLocked}
+                      disabled={isPayrollLocked || !workforceCaps.canMarkAttendance}
                       className={`py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${record?.status === "present" ? "bg-green-500 text-white shadow-inner scale-[0.98]" : "bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
                     >
                       ✓ Present
@@ -446,7 +833,7 @@ export function WorkforceManagement() {
                             record?.id || null,
                           )
                         }
-                        disabled={isPayrollLocked}
+                        disabled={isPayrollLocked || !workforceCaps.canMarkAttendance}
                         className={`py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${record?.status === "half-day" ? "bg-orange-500 text-white shadow-inner scale-[0.98]" : "bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
                       >
                         Half-Day
@@ -459,10 +846,39 @@ export function WorkforceManagement() {
                             record?.id || null,
                           )
                         }
-                        disabled={isPayrollLocked}
+                        disabled={isPayrollLocked || !workforceCaps.canMarkAttendance}
                         className={`py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${record?.status === "absent" ? "bg-red-500 text-white shadow-inner scale-[0.98]" : "bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
                       >
                         ✕ Absent
+                      </button>
+                    </div>
+                    
+                    <div className="mt-2 pt-2 border-t border-slate-100 flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Add a comment or note..."
+                        className="flex-1 text-xs px-2 py-1.5 bg-slate-50 border border-slate-200 rounded outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-700 placeholder:text-slate-400"
+                        defaultValue={record?.notes || ""}
+                        id={`note-input-${record?.id}`}
+                        disabled={!record?.id}
+                        title={!record?.id ? "Mark attendance first to add notes" : ""}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && record?.id) {
+                            handleUpdateNotes(record.id, e.currentTarget.value);
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          const input = document.getElementById(`note-input-${record?.id}`) as HTMLInputElement;
+                          if (input && record?.id) {
+                            handleUpdateNotes(record.id, input.value);
+                          }
+                        }}
+                        disabled={!record?.id}
+                        className="px-2.5 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:bg-slate-50 disabled:text-slate-400 rounded text-[10px] font-bold uppercase tracking-wider transition-colors"
+                      >
+                        Submit
                       </button>
                     </div>
                   </div>
@@ -484,10 +900,10 @@ export function WorkforceManagement() {
       <AddWorkerModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        projectId={projectId}
+        projectId={projectId || 1}
         workerToEdit={selectedWorker}
         onSuccess={() => {
-          fetchWorkers();
+          if (projectId) fetchWorkers();
         }}
       />
 

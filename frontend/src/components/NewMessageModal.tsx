@@ -36,10 +36,11 @@ export function NewMessageModal({ isOpen, onClose, onSuccess, replyTo }: NewMess
 
   const fetchUsers = async () => {
     try {
-      const resp = await api.get('/users/');
-      setUsers(Array.isArray(resp.data) ? resp.data : (resp.data.results || []));
-    } catch(err) {
+      const resp = await api.get("/users/message-recipients/");
+      setUsers(Array.isArray(resp.data) ? resp.data : resp.data?.results ?? []);
+    } catch (err) {
       console.error(err);
+      setUsers([]);
     }
   };
 
@@ -54,13 +55,17 @@ export function NewMessageModal({ isOpen, onClose, onSuccess, replyTo }: NewMess
     
     // Find the mapped user target
     const searchString = recipientEmail.trim().toLowerCase();
-    const targetUser = users.find(u => 
-        (u.email && u.email.toLowerCase().trim() === searchString) || 
-        (u.username && u.username.toLowerCase().trim() === searchString)
+    const targetUser = users.find(
+      (u) =>
+        (u.email && u.email.toLowerCase().trim() === searchString) ||
+        (u.username && u.username.toLowerCase().trim() === searchString) ||
+        (u.full_name && u.full_name.toLowerCase().trim() === searchString),
     );
 
     if (!targetUser) {
-        setError("Could not find any system user registered with that email or username.");
+        setError(
+          "Recipient not found. Pick someone from your project team list, or check the email/username.",
+        );
         return;
     }
     
@@ -78,14 +83,17 @@ export function NewMessageModal({ isOpen, onClose, onSuccess, replyTo }: NewMess
       onClose();
     } catch (err: any) {
       console.error(err);
-      setError("Failed to send message. Please try again.");
+      setError(
+        err.response?.data?.detail ||
+          "Failed to send message. Please try again.",
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
           <h2 className="text-xl font-bold text-slate-900">
@@ -109,15 +117,33 @@ export function NewMessageModal({ isOpen, onClose, onSuccess, replyTo }: NewMess
           
           <div className="grid grid-cols-2 gap-6">
              <div className="col-span-2">
-                <label className="block text-sm font-medium text-slate-700 mb-2">Recipient Email or Username</label>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Recipient
+                </label>
                 <input
                   type="text"
+                  list="message-recipient-options"
                   value={recipientEmail}
-                  onChange={e => setRecipientEmail(e.target.value)}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
+                  autoComplete="off"
                   className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-shadow"
-                  placeholder="e.g. manager@buildwise.com"
+                  placeholder="Search name, email, or username"
                   disabled={!!replyTo}
                 />
+                <datalist id="message-recipient-options">
+                  {users.map((u) => (
+                    <option
+                      key={u.id}
+                      value={u.email || u.username}
+                      label={`${u.full_name || u.username} (${u.role?.replace(/-/g, " ")})`}
+                    />
+                  ))}
+                </datalist>
+                {users.length > 0 && (
+                  <p className="text-xs text-slate-500 mt-1.5">
+                    {users.length} contact{users.length === 1 ? "" : "s"} on your project team
+                  </p>
+                )}
              </div>
              
              <div className="col-span-2">

@@ -1,4 +1,3 @@
-import React from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, CheckCircle2, DollarSign, X } from "lucide-react";
 
@@ -58,8 +57,13 @@ export function ConfirmActionModal({
   const config = getConfig();
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in text-left">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative transform transition-all scale-100">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 text-left">
+      <div
+        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm min-h-[125vh] w-full"
+        aria-hidden
+        onClick={onCancel}
+      />
+      <div className="relative z-10 bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
         <button
           onClick={onCancel}
           className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"

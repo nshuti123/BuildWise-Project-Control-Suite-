@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "./context/AuthContext";
+import { ProjectProvider } from "./context/ProjectContext";
 import { RoleBasedSidebar } from "./components/RoleBasedSidebar";
 import { LoginPage } from "./pages/LoginPage";
 import { Dashboard } from "./pages/Dashboard";
@@ -11,29 +12,39 @@ import { ProgressMonitoring } from "./pages/ProgressMonitoring";
 import { Reports } from "./pages/Reports";
 import { Communication } from "./pages/Communication";
 import { Documents } from "./pages/Documents";
-import { Resources } from "./pages/Resources";
 import { SiteEngineerDashboard } from "./pages/SiteEngineerDashboard";
 import { ProcurementOfficerDashboard } from "./pages/ProcurementOfficerDashboard";
 import { ClientDashboard } from "./pages/ClientDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { UserManagement } from "./pages/UserManagement";
 import { SubcontractorDashboard } from "./pages/SubcontractorDashboard";
-import { ChangeOrders } from "./pages/ChangeOrders";
-import { RFI } from "./pages/RFI";
-import { Bidding } from "./pages/Bidding";
-import { QualityControl } from "./pages/QualityControl";
-import { Timesheets } from "./pages/Timesheets";
-import { Inventory } from "./pages/Inventory";
 import { Suppliers } from "./pages/Suppliers";
 import { WorkforceManagement } from "./pages/WorkforceManagement";
+import { SiteInventory } from "./pages/SiteInventory";
+import { Inventory } from "./pages/Inventory";
 import { PayrollApprovals } from "./pages/PayrollApprovals";
 import { AccountantDashboard } from "./pages/AccountantDashboard";
+import { ManagingDirectorDashboard } from "./pages/ManagingDirectorDashboard";
+import { DirectorFinanceDashboard } from "./pages/DirectorFinanceDashboard";
+import { TechnicalDirectorDashboard } from "./pages/TechnicalDirectorDashboard";
+import { TechnicalApprovalInbox } from "./pages/TechnicalApprovalInbox";
+import { ProjectDetailPage } from "./pages/ProjectDetailPage";
+import { SiteForemanDashboard } from "./pages/SiteForemanDashboard";
+import { SiteEngineerProjectTeam } from "./pages/SiteEngineerProjectTeam";
+import { SystemLogs } from "./pages/SystemLogs";
 import { ProfileModal } from "./components/ProfileModal";
+import { AnnouncementAlerts } from "./components/AnnouncementAlerts";
 
 export function App() {
   const { user, isLoading, logout, fetchUser } = useAuth();
   const [activeModule, setActiveModule] = useState("dashboard");
+  const [detailProjectId, setDetailProjectId] = useState<number | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  const openProjectDetail = (projectId: number) => {
+    setDetailProjectId(projectId);
+    setActiveModule("project-detail");
+  };
 
   // Reset module to dashboard when logged out to ensure fresh state on next login
   useEffect(() => {
@@ -61,20 +72,33 @@ export function App() {
     if (activeModule === "dashboard") {
       switch (userRole) {
         case "site-engineer":
-          return <SiteEngineerDashboard />;
+          return <SiteEngineerDashboard setActiveModule={setActiveModule} />;
         case "procurement-officer":
-          return <ProcurementOfficerDashboard />;
+          return <ProcurementOfficerDashboard setActiveModule={setActiveModule} />;
         case "client":
           return <ClientDashboard />;
         case "admin":
-          return <AdminDashboard />;
+          return <AdminDashboard setActiveModule={setActiveModule} />;
         case "subcontractor":
           return <SubcontractorDashboard />;
         case "accountant":
-          return <AccountantDashboard />;
+          return <AccountantDashboard setActiveModule={setActiveModule} />;
+        case "managing-director":
+          return <ManagingDirectorDashboard setActiveModule={setActiveModule} />;
+        case "director-finance":
+          return <DirectorFinanceDashboard setActiveModule={setActiveModule} />;
+        case "technical-director":
+          return (
+            <TechnicalDirectorDashboard
+              setActiveModule={setActiveModule}
+              onOpenProjectDetail={openProjectDetail}
+            />
+          );
+        case "site-foreman":
+          return <SiteForemanDashboard setActiveModule={setActiveModule} />;
         case "project-manager":
         default:
-          return <Dashboard />;
+          return <Dashboard setActiveModule={setActiveModule} />;
       }
     }
     // Common modules (accessible based on sidebar configuration)
@@ -88,48 +112,34 @@ export function App() {
       case "procurement":
         return <MaterialProcurement />;
       case "progress":
-        return <ProgressMonitoring />;
+        return <ProgressMonitoring setActiveModule={setActiveModule} />;
       case "reports":
         return <Reports />;
       case "communication":
         return <Communication />;
       case "documents":
         return <Documents />;
-      case "resources":
-        return <Resources />;
-      case "change-orders":
-        return <ChangeOrders />;
-      case "rfi":
-        return <RFI />;
-      case "bidding":
-        return <Bidding />;
-      case "quality-control":
-        return <QualityControl />;
-      case "timesheets":
-        return <Timesheets />;
       case "users":
         return <UserManagement />;
       case "payrolls":
-        return <PayrollApprovals />;
+        return <PayrollApprovals setActiveModule={setActiveModule} />;
       // Role-specific aliases mapping to existing components
       case "orders":
         return <MaterialProcurement />;
-      // Reuse procurement for orders
+      case "site-inventory":
+        return <SiteInventory />;
       case "inventory":
         return <Inventory />;
-      // Dedicated inventory page
       case "suppliers":
         return <Suppliers />;
-      // Dedicated suppliers page
-      case "deliveries":
-        return <MaterialProcurement />;
-      // Reuse procurement for deliveries
       case "safety":
         return <SiteEngineerDashboard />;
       // Keep on dashboard for now
       case "logs":
+        if (userRole === "admin") {
+          return <SystemLogs />;
+        }
         return <SiteEngineerDashboard />;
-      // Keep on dashboard for now
       case "photos":
         return <ClientDashboard />;
       // Reuse client view for photos
@@ -137,7 +147,22 @@ export function App() {
         return <ProjectPlanning />;
       case "workforce":
         return <WorkforceManagement />;
-      // Reuse planning for milestones
+      case "project-team":
+        return <SiteEngineerProjectTeam />;
+      case "technical-approvals":
+        return <TechnicalApprovalInbox />;
+      case "project-detail":
+        return detailProjectId ? (
+          <ProjectDetailPage
+            projectId={detailProjectId}
+            onBack={() => {
+              setDetailProjectId(null);
+              setActiveModule("dashboard");
+            }}
+          />
+        ) : (
+          <div className="p-8 text-center text-slate-500">Select a project from the dashboard.</div>
+        );
       default:
         return (
           <div className="p-8 text-center text-slate-500">
@@ -147,27 +172,31 @@ export function App() {
     }
   };
   return (
-    <div className="min-h-screen w-full bg-slate-100 font-sans">
-      <RoleBasedSidebar
-        activeModule={activeModule}
-        onModuleChange={setActiveModule}
-        userRole={userRole}
-        userName={user.full_name}
-        userProfilePicture={user.profile_picture}
-        onProfileClick={() => setIsProfileModalOpen(true)}
-        onLogout={logout}
-      />
+    <ProjectProvider>
+      <div className="min-h-screen w-full bg-slate-100 font-sans">
+        <RoleBasedSidebar
+          activeModule={activeModule}
+          onModuleChange={setActiveModule}
+          userRole={userRole}
+          userName={user.full_name}
+          userProfilePicture={user.profile_picture}
+          onProfileClick={() => setIsProfileModalOpen(true)}
+          onLogout={logout}
+        />
 
-      <div className="ml-64 p-8 transition-all duration-300">
-        {renderModule()}
+        <div className="ml-64 p-8 pb-28 transition-all duration-300">
+          {renderModule()}
+        </div>
+
+        <AnnouncementAlerts />
+
+        <ProfileModal
+          isOpen={isProfileModalOpen}
+          onClose={() => setIsProfileModalOpen(false)}
+          user={user}
+          onUpdate={fetchUser}
+        />
       </div>
-
-      <ProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        user={user}
-        onUpdate={fetchUser}
-      />
-    </div>
+    </ProjectProvider>
   );
 }

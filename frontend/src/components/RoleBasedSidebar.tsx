@@ -18,12 +18,13 @@ import {
   Image,
   LogOut,
   Shield,
-  Briefcase,
-  HelpCircle,
-  FileCheck,
-  Clock,
+  Crown,
+  Landmark,
+  Wrench,
+  ShieldCheck,
 } from "lucide-react";
 import { NotificationsPopover } from "./NotificationsPopover";
+import { useProject } from "../context/ProjectContext";
 
 interface RoleBasedSidebarProps {
   activeModule: string;
@@ -43,6 +44,26 @@ export function RoleBasedSidebar({
   onProfileClick,
   onLogout,
 }: RoleBasedSidebarProps) {
+  const { currentProjectId, setCurrentProjectId, projects } = useProject();
+
+  const operationsMenu = (
+    dashboard: { id: string; name: string; icon: typeof LayoutDashboard },
+  ) => [
+    dashboard,
+    { id: "planning", name: "Project Planning", icon: Calendar },
+    { id: "tasks", name: "Task Management", icon: CheckSquare },
+    { id: "budget", name: "Budget & Costs", icon: DollarSign },
+    { id: "procurement", name: "Procurement", icon: Package },
+    { id: "site-inventory", name: "Site Inventory", icon: Package },
+    { id: "progress", name: "Progress Monitor", icon: TrendingUp },
+    { id: "reports", name: "Reports", icon: FileText },
+    { id: "payrolls", name: "Payroll Operations", icon: FileText },
+    { id: "workforce", name: "Workforce", icon: Users },
+    { id: "users", name: "Team & Users", icon: Users },
+    { id: "communication", name: "Communication", icon: MessageSquare },
+    { id: "documents", name: "Documents", icon: FolderOpen },
+  ];
+
   // Define menu items based on role
   const getMenuItems = () => {
     switch (userRole) {
@@ -54,9 +75,19 @@ export function RoleBasedSidebar({
             icon: HardHat,
           },
           {
+            id: "project-team",
+            name: "Project Team",
+            icon: Users,
+          },
+          {
             id: "tasks",
             name: "Tasks",
             icon: CheckSquare,
+          },
+          {
+            id: "site-inventory",
+            name: "Site Inventory",
+            icon: Package,
           },
           {
             id: "safety",
@@ -107,11 +138,6 @@ export function RoleBasedSidebar({
             icon: Users,
           },
           {
-            id: "deliveries",
-            name: "Deliveries",
-            icon: Truck,
-          },
-          {
             id: "reports",
             name: "Cost Reports",
             icon: TrendingUp,
@@ -155,44 +181,21 @@ export function RoleBasedSidebar({
             icon: MessageSquare,
           },
         ];
-      case "admin":
+      case "admin": {
+        const adminOps = operationsMenu({
+          id: "dashboard",
+          name: "System Admin",
+          icon: Shield,
+        });
         return [
-          {
-            id: "dashboard",
-            name: "System Admin",
-            icon: Shield,
-          },
-          {
-            id: "users",
-            name: "User Management",
-            icon: Users,
-          },
-          {
-            id: "payrolls",
-            name: "Payroll Approvals",
-            icon: DollarSign,
-          },
-          {
-            id: "settings",
-            name: "System Settings",
-            icon: HardHat, // Using HardHat as a placeholder for settings if Settings icon isn't imported, but I should check imports.
-            // Wait, I didn't import Settings. I should probably use existing icons or add Settings to import.
-            // I'll use AlertTriangle or something available, or just Users which is available.
-            // Actually, let's stick to available icons from the import list I saw earlier.
-            // Imports: LayoutDashboard, Calendar, CheckSquare, DollarSign, Package, TrendingUp, FileText, MessageSquare, FolderOpen, Users, HardHat, ClipboardCheck, AlertTriangle, Camera, ShoppingCart, Truck, Image, LogOut, Shield.
-            // I'll use ClipboardCheck for logs maybe?
-          },
-          {
-            id: "logs",
-            name: "System Logs",
-            icon: ClipboardCheck,
-          },
-          {
-            id: "communication",
-            name: "Communication",
-            icon: MessageSquare,
-          },
+          adminOps[0],
+          { id: "technical-approvals", name: "Approvals", icon: ShieldCheck },
+          ...adminOps.slice(1),
+          { id: "orders", name: "Purchase Orders", icon: ShoppingCart },
+          { id: "suppliers", name: "Suppliers", icon: Users },
+          { id: "logs", name: "System Logs", icon: ClipboardCheck },
         ];
+      }
       case "subcontractor":
         return [
           {
@@ -215,6 +218,53 @@ export function RoleBasedSidebar({
             name: "Site Messages",
             icon: MessageSquare,
           },
+        ];
+      case "managing-director": {
+        const execMenu = operationsMenu({
+          id: "dashboard",
+          name: "Executive Overview",
+          icon: Crown,
+        });
+        return [
+          execMenu[0],
+          { id: "technical-approvals", name: "Technical Approvals", icon: ShieldCheck },
+          ...execMenu.slice(1),
+        ];
+      }
+      case "director-finance":
+        return [
+          { id: "dashboard", name: "Finance Overview", icon: Landmark },
+          { id: "budget", name: "Budget Master", icon: DollarSign },
+          { id: "payrolls", name: "Payroll Operations", icon: FileText },
+          { id: "orders", name: "Purchase Orders", icon: Package },
+          { id: "reports", name: "Cost Reports", icon: TrendingUp },
+          { id: "communication", name: "Communication", icon: MessageSquare },
+        ];
+      case "technical-director":
+        return [
+          { id: "dashboard", name: "Technical Portfolio", icon: Wrench },
+          { id: "technical-approvals", name: "Procurement Activity", icon: ShieldCheck },
+          { id: "planning", name: "Project Planning", icon: Calendar },
+          { id: "tasks", name: "Task Management", icon: CheckSquare },
+          { id: "budget", name: "Budget & Costs", icon: DollarSign },
+          { id: "procurement", name: "Procurement", icon: Package },
+          { id: "suppliers", name: "Suppliers", icon: Truck },
+          { id: "site-inventory", name: "Site Inventory", icon: Package },
+          { id: "progress", name: "Progress Monitor", icon: TrendingUp },
+          { id: "reports", name: "Reports", icon: FileText },
+          { id: "workforce", name: "Workforce & Payroll", icon: Users },
+          { id: "users", name: "All Users", icon: Users },
+          { id: "documents", name: "Documents", icon: FolderOpen },
+          { id: "communication", name: "Communication", icon: MessageSquare },
+        ];
+      case "site-foreman":
+        return [
+          { id: "dashboard", name: "Field Operations", icon: HardHat },
+          { id: "site-inventory", name: "Site Inventory", icon: Package },
+          { id: "workforce", name: "Workforce", icon: Users },
+          { id: "payrolls", name: "Payroll", icon: FileText },
+          { id: "tasks", name: "Task Management", icon: CheckSquare },
+          { id: "communication", name: "Communication", icon: MessageSquare },
         ];
       case "accountant":
         return [
@@ -244,6 +294,12 @@ export function RoleBasedSidebar({
             icon: MessageSquare,
           },
         ];
+      case "safety-officer":
+        return [
+          { id: "dashboard", name: "Safety Overview", icon: AlertTriangle },
+          { id: "safety", name: "Safety Checks", icon: Shield },
+          { id: "communication", name: "Communication", icon: MessageSquare },
+        ];
       case "project-manager":
       default:
         return [
@@ -251,6 +307,11 @@ export function RoleBasedSidebar({
             id: "dashboard",
             name: "Overview",
             icon: LayoutDashboard,
+          },
+          {
+            id: "technical-approvals",
+            name: "Technical Approvals",
+            icon: ShieldCheck,
           },
           {
             id: "planning",
@@ -270,6 +331,11 @@ export function RoleBasedSidebar({
           {
             id: "procurement",
             name: "Procurement",
+            icon: Package,
+          },
+          {
+            id: "site-inventory",
+            name: "Site Inventory",
             icon: Package,
           },
           {
@@ -293,33 +359,8 @@ export function RoleBasedSidebar({
             icon: FolderOpen,
           },
           {
-            id: "change-orders",
-            name: "Change Orders",
-            icon: FileCheck,
-          },
-          {
-            id: "rfi",
-            name: "RFI Tracker",
-            icon: HelpCircle,
-          },
-          {
-            id: "bidding",
-            name: "Bidding",
-            icon: Briefcase,
-          },
-          {
-            id: "quality-control",
-            name: "Quality Control",
-            icon: ClipboardCheck,
-          },
-          {
-            id: "timesheets",
-            name: "Timesheets",
-            icon: Clock,
-          },
-          {
-            id: "resources",
-            name: "Resources",
+            id: "workforce",
+            name: "Workforce",
             icon: Users,
           },
         ];
@@ -340,6 +381,16 @@ export function RoleBasedSidebar({
         return "Subcontractor";
       case "accountant":
         return "Accountant";
+      case "managing-director":
+        return "Managing Director";
+      case "director-finance":
+        return "Director of Finance";
+      case "technical-director":
+        return "Technical Director";
+      case "site-foreman":
+        return "Site Foreman";
+      case "safety-officer":
+        return "Safety Officer";
       case "project-manager":
         return "Project Manager";
       default:
@@ -360,8 +411,36 @@ export function RoleBasedSidebar({
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto py-4 space-y-1">
-        {menuItems.map((item) => {
+      <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar flex flex-col">
+        {projects.length > 0 && (
+          <div className="mb-6 pb-6 border-b border-slate-800">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 block px-6">
+              Active Project
+            </label>
+            <div className="px-4">
+              <select
+                value={currentProjectId || ""}
+                onChange={(e) => setCurrentProjectId(Number(e.target.value))}
+                className="w-full bg-slate-800 text-slate-200 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer appearance-none relative font-medium"
+                style={{
+                  backgroundImage: `url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2394a3b8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "right .7rem top 50%",
+                  backgroundSize: ".65rem auto"
+                }}
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1">
+          {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeModule === item.id;
           return (
@@ -385,6 +464,7 @@ export function RoleBasedSidebar({
             </button>
           );
         })}
+        </div>
       </nav>
 
       <div className="p-4 border-t border-slate-800 bg-slate-900/50">
@@ -414,7 +494,7 @@ export function RoleBasedSidebar({
             </div>
             
             <div className="shrink-0">
-               <NotificationsPopover />
+               <NotificationsPopover onNavigate={onModuleChange} />
             </div>
         </div>
         <button

@@ -32,3 +32,10 @@ export function formatBudget(budgetStr: string | number | undefined | null): str
 
   return str;
 }
+
+/** Full Rwf amount for dashboards and tables (always shows full number). */
+export function formatRwf(amount: string | number | undefined | null): string {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "0 Rwf";
+  return `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} Rwf`;
+}

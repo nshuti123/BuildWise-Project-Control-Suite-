@@ -36,7 +36,11 @@ export function LoginPage() {
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await login(username, password);
+    try {
+      await login(username, password);
+    } catch {
+      // AuthContext sets error for display
+    }
   };
 
   const handleRequestReset = async (e: React.FormEvent) => {

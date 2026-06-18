@@ -1,13 +1,30 @@
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Package, X, Loader2 } from "lucide-react";
+import { Package, X, Loader2, AlertTriangle } from "lucide-react";
 import api from "../api";
+import {
+  FIELD_REQUISITION_STOCK_MESSAGE,
+  parseMaterialRequestError,
+  quantityExceedsStock,
+} from "../utils/materialRequestStock";
+
+export interface MaterialRequestToRevise {
+  id: number;
+  material: number;
+  quantity_requested: string | number;
+  notes?: string;
+  rejection_notes?: string;
+  material_name?: string;
+  material_unit?: string;
+}
 
 interface MaterialRequestModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
   projectId: number;
+  /** When set, revise and resubmit a rejected requisition instead of creating new. */
+  requestToRevise?: MaterialRequestToRevise | null;
 }
 
 export function MaterialRequestModal({
@@ -15,6 +32,7 @@ export function MaterialRequestModal({
   onClose,
   onSuccess,
   projectId,
+  requestToRevise = null,
 }: MaterialRequestModalProps) {
   const [materials, setMaterials] = useState<any[]>([]);
   const [selectedMaterial, setSelectedMaterial] = useState("");
@@ -23,24 +41,41 @@ export function MaterialRequestModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isRevise = Boolean(requestToRevise);
+
   useEffect(() => {
     if (isOpen) {
       fetchMaterials();
-      setSelectedMaterial("");
-      setQuantity("");
-      setNotes("");
+      if (requestToRevise) {
+        setSelectedMaterial(String(requestToRevise.material));
+        setQuantity(String(requestToRevise.quantity_requested));
+        setNotes(requestToRevise.notes || "");
+      } else {
+        setSelectedMaterial("");
+        setQuantity("");
+        setNotes("");
+      }
       setError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, requestToRevise]);
 
   const fetchMaterials = async () => {
     try {
       const resp = await api.get("/procurement/materials/");
-      setMaterials(resp.data);
+      const list = Array.isArray(resp.data) ? resp.data : resp.data?.results ?? [];
+      setMaterials(list);
     } catch (err) {
       console.error("Failed to fetch materials", err);
     }
   };
+
+  const activeMaterial = materials.find(
+    (m) => m.id.toString() === selectedMaterial,
+  );
+  const unitLabel = activeMaterial ? activeMaterial.unit : requestToRevise?.material_unit || "units";
+  const exceedsStock =
+    Boolean(activeMaterial) &&
+    quantityExceedsStock(quantity, activeMaterial?.current_stock);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,33 +84,38 @@ export function MaterialRequestModal({
       return;
     }
 
+    if (exceedsStock) {
+      setError(FIELD_REQUISITION_STOCK_MESSAGE);
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
     try {
-      await api.post("/procurement/requests/", {
-        project: projectId,
-        material: selectedMaterial,
-        quantity_requested: quantity,
-        notes: notes,
-      });
+      if (isRevise && requestToRevise) {
+        await api.post(`/procurement/requests/${requestToRevise.id}/resubmit/`, {
+          material: selectedMaterial,
+          quantity_requested: quantity,
+          notes: notes,
+        });
+      } else {
+        await api.post("/procurement/requests/", {
+          project: projectId,
+          material: selectedMaterial,
+          quantity_requested: quantity,
+          notes: notes,
+        });
+      }
       onSuccess();
       onClose();
     } catch (err: any) {
-      setError(
-        err.response?.data?.detail || "Failed to submit material request.",
-      );
+      setError(parseMaterialRequestError(err.response?.data));
     } finally {
       setIsSubmitting(false);
     }
   };
 
   if (!isOpen) return null;
-
-  // Selected Material Unit Hint
-  const activeMaterial = materials.find(
-    (m) => m.id.toString() === selectedMaterial,
-  );
-  const unitLabel = activeMaterial ? activeMaterial.unit : "units";
 
   return createPortal(
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-[9999] animate-in fade-in duration-200">
@@ -87,10 +127,12 @@ export function MaterialRequestModal({
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">
-                Request Materials
+                {isRevise ? "Revise Requisition" : "Request Materials"}
               </h2>
               <p className="text-sm text-slate-500">
-                Submit a field requisition
+                {isRevise
+                  ? "Update quantities and resubmit for approval"
+                  : "Submit a field requisition from warehouse stock"}
               </p>
             </div>
           </div>
@@ -103,9 +145,27 @@ export function MaterialRequestModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          {isRevise && requestToRevise?.rejection_notes && (
+            <div className="p-3 bg-red-50 text-red-800 rounded-lg text-sm border border-red-100">
+              <p className="font-bold text-red-900 mb-1">Rejection notes</p>
+              <p>{requestToRevise.rejection_notes}</p>
+            </div>
+          )}
+
+          {exceedsStock && (
+            <div className="p-3 bg-amber-50 text-amber-950 rounded-lg text-sm border border-amber-200 flex gap-2">
+              <AlertTriangle className="shrink-0 text-amber-600 mt-0.5" size={18} />
+              <div>
+                <p className="font-bold text-amber-900 mb-1">Insufficient warehouse stock</p>
+                <p>{FIELD_REQUISITION_STOCK_MESSAGE}</p>
+              </div>
+            </div>
+          )}
+
           {error && (
-            <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm font-medium border border-red-100">
-              {error}
+            <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm font-medium border border-red-100 flex gap-2">
+              <AlertTriangle className="shrink-0 text-red-600 mt-0.5" size={18} />
+              <p>{error}</p>
             </div>
           )}
 
@@ -115,7 +175,10 @@ export function MaterialRequestModal({
             </label>
             <select
               value={selectedMaterial}
-              onChange={(e) => setSelectedMaterial(e.target.value)}
+              onChange={(e) => {
+                setSelectedMaterial(e.target.value);
+                setError(null);
+              }}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all text-sm font-medium text-slate-800"
               required
             >
@@ -137,8 +200,12 @@ export function MaterialRequestModal({
                 type="number"
                 min="0.1"
                 step="0.01"
+                max={activeMaterial ? Number(activeMaterial.current_stock) : undefined}
                 value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
+                onChange={(e) => {
+                  setQuantity(e.target.value);
+                  setError(null);
+                }}
                 className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all text-sm font-medium text-slate-800 pr-16"
                 placeholder="0.00"
                 required
@@ -147,6 +214,14 @@ export function MaterialRequestModal({
                 {unitLabel}
               </div>
             </div>
+            {activeMaterial && (
+              <p className="text-xs text-slate-500 mt-1.5">
+                Available in warehouse:{" "}
+                <span className="font-semibold text-slate-700">
+                  {Number(activeMaterial.current_stock)} {activeMaterial.unit}
+                </span>
+              </p>
+            )}
           </div>
 
           <div>
@@ -164,14 +239,16 @@ export function MaterialRequestModal({
           <div className="pt-2">
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || exceedsStock}
               className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-sm shadow-blue-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="animate-spin" size={18} />
-                  Submitting Request...
+                  {isRevise ? "Resubmitting…" : "Submitting Request…"}
                 </>
+              ) : isRevise ? (
+                "Resubmit for approval"
               ) : (
                 "Submit Field Requisition"
               )}

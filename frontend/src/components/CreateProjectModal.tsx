@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 
 import api from "../api";
+import { formatApiError } from "../utils/apiHelpers";
+import { useAuth } from "../context/AuthContext";
+import { canCreateProject } from "../utils/projectPermissions";
 
 interface CreateProjectModalProps {
   isOpen: boolean;
@@ -23,6 +26,9 @@ export function CreateProjectModal({
   onClose,
   onSuccess,
 }: CreateProjectModalProps) {
+  const { user } = useAuth();
+  const mayCreate = canCreateProject(user?.role);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [province, setProvince] = useState("");
@@ -31,15 +37,25 @@ export function CreateProjectModal({
   const [cell, setCell] = useState("");
   const [village, setVillage] = useState("");
 
-  const [provincesList, setProvincesList] = useState<{id: number, name: string}[]>([]);
-  const [districtsList, setDistrictsList] = useState<{id: number, name: string}[]>([]);
-  const [sectorsList, setSectorsList] = useState<{id: number, name: string}[]>([]);
-  const [cellsList, setCellsList] = useState<{id: number, name: string}[]>([]);
-  const [villagesList, setVillagesList] = useState<{id: number, name: string}[]>([]);
+  const [provincesList, setProvincesList] = useState<
+    { id: number; name: string }[]
+  >([]);
+  const [districtsList, setDistrictsList] = useState<
+    { id: number; name: string }[]
+  >([]);
+  const [sectorsList, setSectorsList] = useState<
+    { id: number; name: string }[]
+  >([]);
+  const [cellsList, setCellsList] = useState<{ id: number; name: string }[]>(
+    [],
+  );
+  const [villagesList, setVillagesList] = useState<
+    { id: number; name: string }[]
+  >([]);
 
   const [formData, setFormData] = useState({
     name: "",
-    budget: "",
+    budget_amount: "",
     deadline: "",
     status: "on-track",
     construction_type: "commercial",
@@ -50,7 +66,7 @@ export function CreateProjectModal({
     if (isOpen) {
       setFormData({
         name: "",
-        budget: "",
+        budget_amount: "",
         deadline: "",
         status: "on-track",
         construction_type: "commercial",
@@ -67,13 +83,17 @@ export function CreateProjectModal({
 
   useEffect(() => {
     if (isOpen) {
-      api.get("/projects/locations/?parent=null").then((res) => setProvincesList(res.data));
+      api
+        .get("/projects/locations/?parent=null")
+        .then((res) => setProvincesList(res.data));
     }
   }, [isOpen]);
 
   useEffect(() => {
     if (province) {
-      api.get(`/projects/locations/?parent=${province}`).then((res) => setDistrictsList(res.data));
+      api
+        .get(`/projects/locations/?parent=${province}`)
+        .then((res) => setDistrictsList(res.data));
     } else {
       setDistrictsList([]);
     }
@@ -81,7 +101,9 @@ export function CreateProjectModal({
 
   useEffect(() => {
     if (district) {
-      api.get(`/projects/locations/?parent=${district}`).then((res) => setSectorsList(res.data));
+      api
+        .get(`/projects/locations/?parent=${district}`)
+        .then((res) => setSectorsList(res.data));
     } else {
       setSectorsList([]);
     }
@@ -89,7 +111,9 @@ export function CreateProjectModal({
 
   useEffect(() => {
     if (sector) {
-      api.get(`/projects/locations/?parent=${sector}`).then((res) => setCellsList(res.data));
+      api
+        .get(`/projects/locations/?parent=${sector}`)
+        .then((res) => setCellsList(res.data));
     } else {
       setCellsList([]);
     }
@@ -97,7 +121,9 @@ export function CreateProjectModal({
 
   useEffect(() => {
     if (cell) {
-      api.get(`/projects/locations/?parent=${cell}`).then((res) => setVillagesList(res.data));
+      api
+        .get(`/projects/locations/?parent=${cell}`)
+        .then((res) => setVillagesList(res.data));
     } else {
       setVillagesList([]);
     }
@@ -106,17 +132,34 @@ export function CreateProjectModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (!mayCreate) {
+      setError("Only the Technical Director can create new projects.");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await api.post("/projects/", { ...formData, location: village });
+      const payload: Record<string, unknown> = {
+        ...formData,
+        location: village ? Number(village) : null,
+      };
+      if (
+        payload.budget_amount !== "" &&
+        payload.budget_amount !== null &&
+        payload.budget_amount !== undefined
+      ) {
+        payload.budget_amount = Number(payload.budget_amount);
+      }
+      await api.post("/projects/", payload);
+
       onSuccess();
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to create project:", err);
       setError(
-        err.response?.data?.detail ||
-          "Failed to create project. Please ensure all fields are properly formatted.",
+        formatApiError(err, "Failed to create project. Please check all fields."),
       );
     } finally {
       setLoading(false);
@@ -134,7 +177,8 @@ export function CreateProjectModal({
               Create New Project
             </h2>
             <p className="text-sm text-slate-500 mt-1">
-              Initialize a new construction project workspace.
+              Set up the project basics. Assign the project manager and site team
+              from the project details page after creation.
             </p>
           </div>
           <button
@@ -302,16 +346,22 @@ export function CreateProjectModal({
                   size={18}
                 />
                 <input
-                  type="text"
+                  type="number"
                   required
-                  value={formData.budget}
+                  value={formData.budget_amount}
                   onChange={(e) =>
-                    setFormData({ ...formData, budget: e.target.value })
+                    setFormData({ ...formData, budget_amount: e.target.value })
                   }
-                  placeholder="e.g. Rwf 850M"
+                  min={0}
+                  step="0.01"
+                  placeholder="e.g. 850000000"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
                 />
               </div>
+              <p className="text-xs text-slate-500 mt-1.5">
+                Enter the budget amount in RWF (numbers only). This will be
+                enforced as the allocation cap.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-1.5">
@@ -406,6 +456,6 @@ export function CreateProjectModal({
         </form>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Package,
   Truck,
@@ -13,7 +13,16 @@ import {
 import { MetricCard } from "../components/MetricCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { NewOrderModal } from "../components/NewOrderModal";
+import { PurchaseOrderDetailModal } from "../components/PurchaseOrderDetailModal";
 import api from "../api";
+import { withProjectQuery } from "../utils/apiHelpers";
+import { useAuth } from "../context/AuthContext";
+import { useProject } from "../context/ProjectContext";
+import { MaterialRequisitionsPanel } from "../components/MaterialRequisitionsPanel";
+import { ProjectScopeBanner } from "../components/ProjectScopeBanner";
+import { Pagination } from "../components/Pagination";
+import { TableReportActions } from "../components/TableReportActions";
+import type { TableReportData } from "../utils/tableReportExport";
 
 interface Supplier {
   id: number;
@@ -42,12 +51,30 @@ interface PurchaseOrder {
 }
 
 export function MaterialProcurement() {
+  const { user } = useAuth();
+  const { currentProjectId, projects } = useProject();
+  const activeProject = projects.find((p) => p.id === currentProjectId);
+  const isProcurementOfficer = user?.role === "procurement-officer";
+  const isFinanceViewer = user?.role === "director-finance";
+  const canDeleteOrders =
+    isProcurementOfficer ||
+    user?.role === "technical-director" ||
+    user?.role === "project-manager" ||
+    user?.role === "admin" ||
+    user?.role === "managing-director";
   const [materials, setMaterials] = useState<Material[]>([]);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [reorderMaterialId, setReorderMaterialId] = useState("");
+  const [selectedOrderDetails, setSelectedOrderDetails] = useState<PurchaseOrder | null>(null);
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+
+  const [bgOrders, setBgOrders] = useState<PurchaseOrder[]>([]);
 
   const handleReorder = (materialId: number) => {
     setReorderMaterialId(materialId.toString());
@@ -59,17 +86,29 @@ export function MaterialProcurement() {
     setIsModalOpen(false);
   };
 
-  const fetchData = async () => {
+  const fetchData = async (page: number = 1) => {
     setIsLoading(true);
+    const projectScope = isProcurementOfficer ? null : currentProjectId;
     try {
-      const [materialsRes, ordersRes, suppliersRes] = await Promise.all([
-        api.get("/procurement/materials/"),
-        api.get("/procurement/orders/"),
-        api.get("/procurement/suppliers/"),
+      const [materialsRes, ordersRes, suppliersRes, bgOrdersRes] = await Promise.all([
+        api.get("/procurement/materials/?page_size=100"),
+        api.get(withProjectQuery(`/procurement/orders/?page=${page}`, projectScope)),
+        api.get("/procurement/suppliers/?page_size=100"),
+        api.get(withProjectQuery("/procurement/orders/?page_size=1000", projectScope)),
       ]);
       setMaterials(materialsRes.data);
       setOrders(ordersRes.data);
       setSuppliers(suppliersRes.data);
+      setBgOrders(bgOrdersRes.data);
+      
+      const authResp = ordersRes as any;
+      if (authResp.pagination) {
+        setTotalItems(authResp.pagination.count);
+        setTotalPages(Math.ceil(authResp.pagination.count / 10));
+      } else {
+        setTotalItems(ordersRes.data.length);
+        setTotalPages(1);
+      }
     } catch (err) {
       console.error("Failed to fetch procurement data:", err);
     } finally {
@@ -78,30 +117,42 @@ export function MaterialProcurement() {
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData(currentPage);
+  }, [currentPage, currentProjectId]);
 
   const handleStatusChange = async (orderId: number, newStatus: string) => {
     try {
       setOrders((prev) => prev.map(o => o.id === orderId ? { ...o, status: newStatus as any } : o));
       await api.patch(`/procurement/orders/${orderId}/`, { status: newStatus });
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to update PO status", err);
+      const errorMessage = err.response?.data?.non_field_errors?.[0] || 
+                           err.response?.data?.detail || 
+                           "Failed to update status. Please check your budget limits.";
+      alert(`Error: ${errorMessage}`);
       fetchData();
     }
   };
 
+  const handleRequestPayment = async (orderId: number) => {
+    try {
+      await api.post(`/procurement/orders/${orderId}/request-payment/`);
+      fetchData();
+    } catch (err: any) {
+      console.error("Failed to request payment", err);
+      alert("Failed to request payment: " + (err.response?.data?.detail || ""));
+    }
+  };
 
-
-  // Compute Metrics
-  const activeOrdersCount = orders.filter(
+  // Compute Metrics using backend bg order arrays for accurate total scope representation across pages natively!
+  const activeOrdersCount = bgOrders.filter(
     (o) => o.status !== "completed",
   ).length;
-  const pendingDeliveriesCount = orders.filter(
+  const pendingDeliveriesCount = bgOrders.filter(
     (o) => o.status === "pending" || o.status === "delayed",
   ).length;
-  const delayedOrdersCount = orders.filter(
+  const delayedOrdersCount = bgOrders.filter(
     (o) => o.status === "delayed",
   ).length;
   const lowStockItemsCount = materials.filter(
@@ -133,6 +184,27 @@ export function MaterialProcurement() {
     }
   };
 
+  const purchaseOrdersReport = useMemo((): TableReportData => {
+    const columns = ["Order ID", "Date", "Supplier", "Material", "Quantity", "Amount (Rwf)", "Status"];
+    const rows = orders.map((order) => [
+      order.po_number,
+      formatDate(order.order_date),
+      order.supplier_name,
+      order.material_name,
+      `${order.quantity} ${order.material_unit}`,
+      order.total_amount,
+      order.status,
+    ]);
+    const scope = activeProject?.name ?? "All projects";
+    return {
+      title: `Purchase Orders — ${scope}`,
+      subtitle: `${orders.length} orders on this page`,
+      filename: `Purchase_Orders_${currentProjectId ?? "all"}`,
+      columns,
+      rows,
+    };
+  }, [orders, activeProject?.name, currentProjectId]);
+
   if (isLoading && materials.length === 0) {
     return (
       <div className="p-8 text-center text-slate-500">
@@ -146,26 +218,49 @@ export function MaterialProcurement() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            Material Procurement
+            {isFinanceViewer || isProcurementOfficer
+              ? "Purchase Orders"
+              : "Material Procurement"}
           </h1>
           <p className="text-slate-600">
-            Manage suppliers, inventory, and purchase orders
+            {isFinanceViewer
+              ? "Review purchase orders and committed spend across projects"
+              : isProcurementOfficer
+                ? "View and manage all purchase orders"
+                : "Manage suppliers, inventory, and purchase orders"}
           </p>
         </div>
-        <div className="flex gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors bg-white shadow-sm cursor-pointer">
-            <Filter size={18} />
-            <span className="text-sm font-medium">Filter</span>
-          </button>
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm shadow-blue-500/20 cursor-pointer"
-          >
-            <Plus size={18} />
-            <span className="text-sm font-medium">New Order</span>
-          </button>
-        </div>
+        {!isFinanceViewer && (
+          <div className="flex gap-3">
+            <button className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors bg-white shadow-sm cursor-pointer">
+              <Filter size={18} />
+              <span className="text-sm font-medium">Filter</span>
+            </button>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm shadow-blue-500/20 cursor-pointer"
+            >
+              <Plus size={18} />
+              <span className="text-sm font-medium">New Order</span>
+            </button>
+          </div>
+        )}
       </div>
+
+      {activeProject && !isProcurementOfficer && (
+        <ProjectScopeBanner
+          projectName={activeProject.name}
+          context="procurement activity"
+        />
+      )}
+
+      {(isProcurementOfficer || currentProjectId) && (
+        <MaterialRequisitionsPanel
+          projectId={isProcurementOfficer ? null : currentProjectId}
+          compact={isProcurementOfficer}
+          onUpdated={() => fetchData(currentPage)}
+        />
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <MetricCard
@@ -210,7 +305,13 @@ export function MaterialProcurement() {
             <h2 className="text-xl font-bold text-slate-900">
               Recent Purchase Orders
             </h2>
-            <div className="relative hidden sm:block">
+            <div className="flex flex-wrap items-center gap-3">
+              <TableReportActions
+                report={purchaseOrdersReport}
+                projectId={isProcurementOfficer ? undefined : currentProjectId ?? undefined}
+                disabled={orders.length === 0}
+              />
+              <div className="relative hidden sm:block">
               <Search
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 size={16}
@@ -220,6 +321,7 @@ export function MaterialProcurement() {
                 placeholder="Search orders..."
                 className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64"
               />
+              </div>
             </div>
           </div>
 
@@ -253,7 +355,8 @@ export function MaterialProcurement() {
                   {orders.map((order) => (
                     <tr
                       key={order.id}
-                      className="border-b border-slate-100 hover:bg-slate-50 transition-colors"
+                      onClick={() => setSelectedOrderDetails(order)}
+                      className="border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer"
                     >
                       <td className="py-3 px-4 text-sm font-medium text-blue-600">
                         {order.po_number}
@@ -272,18 +375,27 @@ export function MaterialProcurement() {
                         {formatCurrency(order.total_amount)}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
+                        <div className="flex flex-col items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
                            <StatusBadge status={order.status} size="sm" />
-                           <select
-                              value={order.status}
-                              onChange={(e) => handleStatusChange(order.id, e.target.value)}
-                              className="text-xs border border-slate-200 rounded text-slate-600 bg-white py-0.5 px-1 hover:border-slate-300 focus:outline-none cursor-pointer"
-                              title="Update Status"
-                           >
-                              <option value="pending">Pending</option>
-                              <option value="on-track" disabled={order.status === 'completed'}>On Track</option>
-                              <option value="completed" disabled={order.status === 'completed'}>Completed</option>
-                           </select>
+                           {!isFinanceViewer && (order.status === 'on-track' || order.status === 'delayed') && (
+                             <button 
+                               onClick={() => handleRequestPayment(order.id)}
+                               className="text-xs font-medium bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-200 hover:bg-blue-100 transition-colors"
+                             >
+                               Request Payment
+                             </button>
+                           )}
+                           {!isFinanceViewer && (order.status !== 'on-track' && order.status !== 'completed') && (
+                             <select
+                                value={order.status}
+                                onChange={(e) => handleStatusChange(order.id, e.target.value)}
+                                className="text-xs border border-slate-200 rounded text-slate-600 bg-white py-0.5 px-1 hover:border-slate-300 focus:outline-none cursor-pointer"
+                                title="Update Status"
+                             >
+                                <option value="pending">Pending</option>
+                                <option value="delayed">Delayed</option>
+                             </select>
+                           )}
                         </div>
                       </td>
                     </tr>
@@ -291,6 +403,12 @@ export function MaterialProcurement() {
                 </tbody>
               </table>
             )}
+            <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                totalItems={totalItems}
+            />
           </div>
         </div>
 
@@ -381,13 +499,15 @@ export function MaterialProcurement() {
                             </p>
                         </div>
                         </div>
-                        <button 
-                            onClick={() => handleReorder(alert.id)}
-                            className={`text-xs font-medium bg-white px-3 py-1 rounded border hover:bg-opacity-50 ${
-                            isCritical ? "text-red-600 border-red-200 hover:bg-red-50" : "text-amber-600 border-amber-200 hover:bg-amber-50"
-                        }`}>
-                        Reorder
-                        </button>
+                        {!isFinanceViewer && (
+                          <button 
+                              onClick={() => handleReorder(alert.id)}
+                              className={`text-xs font-medium bg-white px-3 py-1 rounded border hover:bg-opacity-50 ${
+                              isCritical ? "text-red-600 border-red-200 hover:bg-red-50" : "text-amber-600 border-amber-200 hover:bg-amber-50"
+                          }`}>
+                          Reorder
+                          </button>
+                        )}
                     </div>
                 )})}
                 </div>
@@ -433,6 +553,14 @@ export function MaterialProcurement() {
         onClose={handleCloseModal}
         onOrderCreated={fetchData}
         initialMaterialId={reorderMaterialId}
+        defaultProjectId={currentProjectId}
+      />
+      <PurchaseOrderDetailModal
+        isOpen={!!selectedOrderDetails}
+        onClose={() => setSelectedOrderDetails(null)}
+        order={selectedOrderDetails}
+        canDelete={canDeleteOrders}
+        onDeleted={() => fetchData(currentPage)}
       />
     </div>
   );

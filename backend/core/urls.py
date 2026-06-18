@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/procurement/', include('procurement.urls')),
     path('api/projects/', include('projects.urls')),
     path('api/workforce/', include('workforce.urls')),
+    path('api/approvals/', include('approvals.urls')),
 ]
 
 if settings.DEBUG:
